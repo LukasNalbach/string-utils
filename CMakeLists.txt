@@ -143,7 +143,6 @@ set(string_utils_dependencies
 
 add_library(string_utils INTERFACE)
 target_include_directories(string_utils INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
-target_compile_options(string_utils INTERFACE -fno-strict-aliasing)
 target_compile_definitions(string_utils INTERFACE STRING_UTILS_ENV_PREFIX="${STRING_UTILS_PREFIX}")
 target_link_libraries(string_utils INTERFACE ${string_utils_dependencies})
 
@@ -151,7 +150,6 @@ if(STRING_UTILS_EXTERN_TEMPLATES)
   # explicit instantiations of the sort functions (see misc/sort.hpp)
   add_library(string_utils_sort STATIC src/sort.cpp)
   target_include_directories(string_utils_sort PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
-  target_compile_options(string_utils_sort PRIVATE -fno-strict-aliasing)
   target_link_libraries(string_utils_sort PRIVATE ${string_utils_dependencies})
   target_link_libraries(string_utils INTERFACE string_utils_sort)
 else()

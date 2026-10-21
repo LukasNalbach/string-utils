@@ -44,9 +44,17 @@
 #include <string>
 #include <system_error>
 
+#include <thread>
+
 #ifndef _WIN32
+#include <cerrno>
+#include <fcntl.h>
+#include <spawn.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <unistd.h>
+
+extern char** environ;
 #endif
 
 #include <misc/files.hpp>
@@ -194,7 +202,7 @@ inline uint64_t bzip3_threads(uint64_t blocks, uint64_t threads) { return std::c
  */
 inline uint64_t bzip3_blocks(const std::string& path)
 {
-    std::ifstream in(path, std::ios::binary);
+    direct_ifstream in(path);
     char magic[5];
     in.read(magic, 5);
     if (!in || std::string(magic, 5) != "BZ3v1") return 0;
@@ -217,10 +225,15 @@ inline uint64_t bzip3_blocks(const std::string& path)
 // percentages it prints to its standard output or to its error output
 enum class progress_source { input_bytes, tool_stdout, tool_stderr };
 
-// a command line and the source of its progress
+// where a program writes the file it produces: to its standard output, to its descriptor 3 (both are read through
+// a pipe and written to the file with O_DIRECT, see run_postcompressor) or to the file named in its command line
+enum class output_target { standard_output, descriptor_3, file_argument };
+
+// a command line, the source of its progress and where the program writes its output
 struct postcompressor_command {
     std::string command;
     progress_source progress = progress_source::input_bytes;
+    output_target output = output_target::standard_output;
 };
 
 /**
@@ -244,35 +257,38 @@ inline postcompressor_command compress_command(const postcompressor_spec& spec, 
     using enum postcompressor_kind;
 
     switch (spec.kind) {
-        case zstd: return { "zstd -c -q -" + q + ultra + " -T" + p + " > " + out };
-        case xz: return { "xz -c -q -" + q + " -T" + p + " > " + out };
-        case lzma: return { "xz --format=lzma -c -q -" + q + " > " + out };
-        case gzip: return { "gzip -c -q -" + q + " > " + out };
-        case pigz: return { "pigz -c -q -" + q + " -p " + p + " > " + out };
-        case bzip2: return { "bzip2 -c -q -" + q + " > " + out };
-        case pbzip2: return { "pbzip2 -c -q -" + q + " -p" + p + " > " + out };
-        case lbzip2: return { "lbzip2 -c -q -" + q + " -n " + p + " > " + out };
-        case brotli: return { "brotli -c -q " + q + " > " + out };
-        case lz4: return { "lz4 -c -q -" + q + " > " + out };
-        case lzop: return { "lzop -c -q -" + q + " > " + out };
-        case lzip: return { "lzip -c -q -" + q + " > " + out };
-        case plzip: return { "plzip -c -q -" + q + " -n " + p + " > " + out };
+        case zstd: return { "zstd -c -q -" + q + ultra + " -T" + p };
+        case xz: return { "xz -c -q -" + q + " -T" + p };
+        case lzma: return { "xz --format=lzma -c -q -" + q };
+        case gzip: return { "gzip -c -q -" + q };
+        case pigz: return { "pigz -c -q -" + q + " -p " + p };
+        case bzip2: return { "bzip2 -c -q -" + q };
+        case pbzip2: return { "pbzip2 -c -q -" + q + " -p" + p };
+        case lbzip2: return { "lbzip2 -c -q -" + q + " -n " + p };
+        case brotli: return { "brotli -c -q " + q };
+        case lz4: return { "lz4 -c -q -" + q };
+        case lzop: return { "lzop -c -q -" + q };
+        case lzip: return { "lzip -c -q -" + q };
+        case plzip: return { "plzip -c -q -" + q + " -n " + p };
         case bzip3: {
             const uint64_t block = bzip3_block_mb(from_bytes, level);
             const uint64_t blocks = std::max<uint64_t>(1, (from_bytes + (block << 20) - 1) / (block << 20));
             return { "bzip3 -e -c -j " + std::to_string(bzip3_threads(blocks, threads)) + " -b "
-                + std::to_string(block) + " > " + out };
+                + std::to_string(block) };
         }
-        case sevenzip: return { "7z a -t7z -mx=" + q + " -mmt=" + p + " -bso0 -bsp2 " + out + " " + in + " 2>&1",
-            progress_source::tool_stderr };
+        // 7z writes the archive itself (a 7z archive cannot be written to a pipe)
+        case sevenzip: return { "7z a -t7z -mx=" + q + " -mmt=" + p + " -bso0 -bsp2 " + out + " " + in,
+            progress_source::tool_stderr, output_target::file_argument };
         // -e2: adaptive coder, -t: the blocks are compressed one after another (each with all threads),
-        // -p: without the LZP stage; bsc takes the number of threads from OpenMP
+        // -p: without the LZP stage; bsc takes the number of threads from OpenMP; bsc reads its input file itself (it
+        // seeks in it) and prints its progress to its standard output, so the archive is written to descriptor 3
         case bsc:
 #ifdef _WIN32
-            return { "bsc e " + in + " " + out + " -b" + q + " -e2tp", progress_source::tool_stdout };
+            return { "bsc e " + in + " " + out + " -b" + q + " -e2tp", progress_source::tool_stdout,
+                output_target::file_argument };
 #else
-            return { "OMP_NUM_THREADS=" + p + " bsc e " + in + " " + out + " -b" + q + " -e2tp",
-                progress_source::tool_stdout };
+            return { "OMP_NUM_THREADS=" + p + " bsc e " + in + " /dev/fd/3 -b" + q + " -e2tp",
+                progress_source::tool_stdout, output_target::descriptor_3 };
 #endif
         case none: break;
     }
@@ -297,27 +313,27 @@ inline postcompressor_command decompress_command(const postcompressor_spec& spec
     using enum postcompressor_kind;
 
     switch (spec.kind) {
-        case zstd: return { "zstd -d -c -q > " + out };
-        case xz: return { "xz -d -c -q -T" + p + " > " + out };
-        case lzma: return { "xz --format=lzma -d -c -q > " + out };
-        case gzip: return { "gzip -d -c -q > " + out };
-        case pigz: return { "pigz -d -c -q -p " + p + " > " + out };
-        case bzip2: return { "bzip2 -d -c -q > " + out };
-        case pbzip2: return { "pbzip2 -d -c -q -p" + p + " > " + out };
-        case lbzip2: return { "lbzip2 -d -c -q -n " + p + " > " + out };
-        case brotli: return { "brotli -d -c > " + out };
-        case lz4: return { "lz4 -d -c -q > " + out };
-        case lzop: return { "lzop -d -c -q > " + out };
-        case lzip: return { "lzip -d -c -q > " + out };
-        case plzip: return { "plzip -d -c -q -n " + p + " > " + out };
-        case bzip3: return { "bzip3 -d -c -j " + std::to_string(bzip3_threads(bzip3_blocks(from), threads)) + " > "
-            + out };
-        // 2>&1 precedes the redirection of stdout: the progress (stderr) is written to the pipe, the output to out
-        case sevenzip: return { "7z x -so -bsp2 -bso0 " + in + " 2>&1 > " + out, progress_source::tool_stderr };
+        case zstd: return { "zstd -d -c -q" };
+        case xz: return { "xz -d -c -q -T" + p };
+        case lzma: return { "xz --format=lzma -d -c -q" };
+        case gzip: return { "gzip -d -c -q" };
+        case pigz: return { "pigz -d -c -q -p " + p };
+        case bzip2: return { "bzip2 -d -c -q" };
+        case pbzip2: return { "pbzip2 -d -c -q -p" + p };
+        case lbzip2: return { "lbzip2 -d -c -q -n " + p };
+        case brotli: return { "brotli -d -c" };
+        case lz4: return { "lz4 -d -c -q" };
+        case lzop: return { "lzop -d -c -q" };
+        case lzip: return { "lzip -d -c -q" };
+        case plzip: return { "plzip -d -c -q -n " + p };
+        case bzip3: return { "bzip3 -d -c -j " + std::to_string(bzip3_threads(bzip3_blocks(from), threads)) };
+        case sevenzip: return { "7z x -so -bsp2 -bso0 " + in, progress_source::tool_stderr };
+        // bsc writes the restored file itself (it seeks in it)
 #ifdef _WIN32
-        case bsc: return { "bsc d " + in + " " + out, progress_source::tool_stdout };
+        case bsc: return { "bsc d " + in + " " + out, progress_source::tool_stdout, output_target::file_argument };
 #else
-        case bsc: return { "OMP_NUM_THREADS=" + p + " bsc d " + in + " " + out, progress_source::tool_stdout };
+        case bsc: return { "OMP_NUM_THREADS=" + p + " bsc d " + in + " " + out, progress_source::tool_stdout,
+            output_target::file_argument };
 #endif
         case none: break;
     }
@@ -370,12 +386,100 @@ inline int run_and_write_peak(int argc, char** argv)
 }
 
 /**
- * @brief runs the command of a compressor. If the program reads its standard input, the file feed_path is
- *        written to it through a pipe in blocks of 1 MiB and the progress is the number of bytes written; else
- *        (bsc and 7z), the progress is read from the percentages the program prints. The error output of the
- *        program is written to the file err_path.
+ * @brief parses the progress a program prints: each number directly followed by '%' (at most 100) is the progress
+ */
+class percent_parser {
+    phase_progress& progress;
+    uint64_t number = 0;
+    bool digits = false;
+
+public:
+    explicit percent_parser(phase_progress& progress) : progress(progress) {}
+
+    // processes the next character the program printed
+    void next(int c)
+    {
+        if (c >= '0' && c <= '9') {
+            number = number * 10 + uint64_t(c - '0');
+            digits = true;
+        } else {
+            if (c == '%' && digits && number <= 100) progress.reached(number);
+            number = 0;
+            digits = false;
+        }
+    }
+};
+
+#ifndef _WIN32
+/**
+ * @brief creates a pipe whose descriptors are at least 10 (so they differ from the descriptors 0 to 3 a spawned
+ *        program gets) and are closed in a spawned program
+ * @param fds is set to the read end and the write end
+ * @return whether the pipe was created
+ */
+inline bool create_spawn_pipe(int fds[2])
+{
+    // the smallest descriptor of a pipe end
+    static constexpr int min_descriptor = 10;
+    int raw[2];
+    if (::pipe(raw) != 0) return false;
+
+    for (int i = 0; i < 2; i++) {
+        fds[i] = ::fcntl(raw[i], F_DUPFD_CLOEXEC, min_descriptor);
+        ::close(raw[i]);
+    }
+
+    if (fds[0] >= 0 && fds[1] >= 0) return true;
+    if (fds[0] >= 0) ::close(fds[0]);
+    if (fds[1] >= 0) ::close(fds[1]);
+    return false;
+}
+
+// closes a descriptor, if it is open, and marks it as closed
+inline void close_descriptor(int& fd)
+{
+    if (fd >= 0) ::close(fd);
+    fd = -1;
+}
+
+// writes size bytes to a descriptor (repeats partial and interrupted writes); returns whether all were written
+inline bool write_to_descriptor(int fd, const char* data, uint64_t size)
+{
+    while (size > 0) {
+        const ssize_t num = ::write(fd, data, size_t(size));
+
+        if (num < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+
+        data += num;
+        size -= uint64_t(num);
+    }
+
+    return true;
+}
+
+// reads up to size bytes from a descriptor (repeats interrupted reads); returns the number read, 0 at the end, -1 on
+// an error
+inline int64_t read_from_descriptor(int fd, char* data, uint64_t size)
+{
+    while (true) {
+        const ssize_t num = ::read(fd, data, size_t(size));
+        if (num >= 0 || errno != EINTR) return int64_t(num);
+    }
+}
+#endif
+
+/**
+ * @brief runs the command of a compressor. If the program reads its standard input, the file feed_path is written to
+ *        it through a pipe in blocks of 1 MiB and the progress is the number of bytes written; else (bsc and 7z), the
+ *        progress is read from the percentages the program prints. If the program writes its output to its standard
+ *        output or to its descriptor 3, it is read through a pipe and written to out_path with O_DIRECT (on Windows,
+ *        the standard output is redirected to out_path). The error output of the program is written to err_path.
  * @param command the command (see compress_command and decompress_command)
  * @param feed_path path of the file that is written to the standard input of the program
+ * @param out_path path of the file the output of the program is written to (unless it writes a file itself)
  * @param err_path path of the file the error output of the program is written to
  * @param log whether the progress is printed in the line of the running phase (see phase_progress)
  * @param peak_path path of the file used to measure the peak memory usage of the program (see measure_peak_option);
@@ -384,10 +488,52 @@ inline int run_and_write_peak(int argc, char** argv)
  * @return whether the command succeeded
  */
 inline bool run_postcompressor(const postcompressor_command& command, const std::string& feed_path,
-    const std::string& err_path, bool log, const std::string& peak_path = "", uint64_t* peak = nullptr)
+    const std::string& out_path, const std::string& err_path, bool log, const std::string& peak_path = "",
+    uint64_t* peak = nullptr)
 {
+    // size in bytes of a block written to or read from a pipe
+    static constexpr uint64_t pipe_block = uint64_t(1) << 20;
     std::string line = command.command;
     if (command.progress != progress_source::tool_stderr) line += " 2> " + shell_quoted(err_path);
+    const bool feed = command.progress == progress_source::input_bytes;
+#ifdef _WIN32
+    if (command.output == output_target::standard_output) line += " > " + shell_quoted(out_path);
+    if (command.progress == progress_source::tool_stderr) line = command.command + " 2>&1" + line.substr(
+        command.command.size());
+    (void) peak_path;
+    (void) peak;
+    FILE* pipe = _popen(line.c_str(), feed ? "wb" : "rb");
+    if (pipe == nullptr) return false;
+    bool fed = true;
+
+    if (feed) {
+        std::error_code error;
+        const uint64_t total = std::filesystem::file_size(feed_path, error);
+        phase_progress progress(log && !error, total);
+        direct_ifstream in(feed_path);
+        std::string buffer;
+        resize_no_init(buffer, pipe_block);
+        uint64_t done = 0;
+
+        while (!error && done < total && in.good()) {
+            const uint64_t len = std::min<uint64_t>(pipe_block, total - done);
+            in.read(buffer.data(), (std::streamsize) len);
+            if ((uint64_t) in.gcount() != len || std::fwrite(buffer.data(), 1, len, pipe) != len) break;
+            done += len;
+            progress.reached(done);
+        }
+
+        progress.finish();
+        fed = !error && done == total;
+    } else {
+        phase_progress progress(log, 100);
+        percent_parser parser(progress);
+        for (int c = std::fgetc(pipe); c != EOF; c = std::fgetc(pipe)) parser.next(c);
+        progress.finish();
+    }
+
+    return _pclose(pipe) == 0 && fed;
+#else
 #ifdef __linux__
     // path of this executable (in the command, /proc/self/exe is the path of the shell)
     std::error_code self_error;
@@ -401,68 +547,134 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
 #else
     const bool measured = false;
 #endif
-    const bool feed = command.progress == progress_source::input_bytes;
-    int status = -1;
-#ifdef _WIN32
-    FILE* pipe = _popen(line.c_str(), feed ? "wb" : "rb");
-#else
-    FILE* pipe = popen(line.c_str(), feed ? "w" : "r");
-#endif
-    if (pipe == nullptr) return false;
+    // the descriptor of the program its output is read from (-1: it writes its output file itself)
+    const int output_descriptor = command.output == output_target::standard_output ? STDOUT_FILENO
+        : command.output == output_target::descriptor_3 ? 3 : -1;
+    // the descriptor of the program its progress is read from (-1: none)
+    const int progress_descriptor = command.progress == progress_source::tool_stdout ? STDOUT_FILENO
+        : command.progress == progress_source::tool_stderr ? STDERR_FILENO : -1;
+
+    // the pipes to the standard input, from the output and from the progress of the program (-1: not used)
+    int in_pipe[2] = { -1, -1 }, out_pipe[2] = { -1, -1 }, progress_pipe[2] = { -1, -1 };
+    auto close_pipes = [&]() {
+        for (int* fds : { in_pipe, out_pipe, progress_pipe }) { close_descriptor(fds[0]); close_descriptor(fds[1]); }
+    };
+
+    if ((feed && !create_spawn_pipe(in_pipe)) || (output_descriptor >= 0 && !create_spawn_pipe(out_pipe))
+            || (progress_descriptor >= 0 && !create_spawn_pipe(progress_pipe))) {
+        close_pipes();
+        return false;
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawnattr_init(&attributes);
+
+    // the program gets the default action of SIGPIPE, which this process ignores while it runs
+    sigset_t default_signals;
+    sigemptyset(&default_signals);
+    sigaddset(&default_signals, SIGPIPE);
+    posix_spawnattr_setsigdefault(&attributes, &default_signals);
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGDEF);
+
+    if (feed) posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO);
+    else posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    if (output_descriptor >= 0) posix_spawn_file_actions_adddup2(&actions, out_pipe[1], output_descriptor);
+    if (progress_descriptor >= 0) posix_spawn_file_actions_adddup2(&actions, progress_pipe[1], progress_descriptor);
+    if (output_descriptor != STDOUT_FILENO && progress_descriptor != STDOUT_FILENO)
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+
+    const auto previous = std::signal(SIGPIPE, SIG_IGN);
+    char shell[] = "/bin/sh";
+    char shell_option[] = "-c";
+    char* arguments[] = { shell, shell_option, line.data(), nullptr };
+    pid_t pid = -1;
+    const bool spawned = posix_spawn(&pid, shell, &actions, &attributes, arguments, environ) == 0;
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attributes);
+    // the ends of the pipes the program uses
+    close_descriptor(in_pipe[0]);
+    close_descriptor(out_pipe[1]);
+    close_descriptor(progress_pipe[1]);
+
+    if (!spawned) {
+        close_pipes();
+        std::signal(SIGPIPE, previous);
+        return false;
+    }
+
+    bool fed = true; // whether the whole file was written to the standard input of the program
+    bool written = true; // whether the whole output of the program was written to out_path
+
+    // writes feed_path to the standard input of the program
+    std::thread feeder;
 
     if (feed) {
-#ifndef _WIN32
-        // ignore SIGPIPE (raised if the program stops reading its input)
-        auto previous = std::signal(SIGPIPE, SIG_IGN);
-#endif
-        static constexpr uint64_t feed_block = uint64_t(1) << 20;
-        std::error_code error;
-        const uint64_t total = std::filesystem::file_size(feed_path, error);
-        phase_progress progress(log && !error, total);
-        direct_ifstream in(feed_path);
-        std::string buffer;
-        resize_no_init(buffer, feed_block);
-        uint64_t done = 0;
+        feeder = std::thread([&]() {
+            std::error_code error;
+            const uint64_t total = std::filesystem::file_size(feed_path, error);
+            phase_progress progress(log && !error, total);
+            direct_ifstream in(feed_path);
+            std::string buffer;
+            resize_no_init(buffer, pipe_block);
+            uint64_t done = 0;
 
-        while (!error && done < total && in.good()) {
-            const uint64_t len = std::min<uint64_t>(feed_block, total - done);
-            in.read(buffer.data(), (std::streamsize) len);
-            if ((uint64_t) in.gcount() != len || std::fwrite(buffer.data(), 1, len, pipe) != len) break;
-            done += len;
-            progress.reached(done);
-        }
-
-        progress.finish();
-#ifdef _WIN32
-        status = _pclose(pipe);
-#else
-        status = pclose(pipe);
-        std::signal(SIGPIPE, previous);
-#endif
-        if (error || done != total) return false;
-    } else {
-        phase_progress progress(log, 100);
-        uint64_t number = 0;
-        bool digits = false;
-
-        for (int c = std::fgetc(pipe); c != EOF; c = std::fgetc(pipe)) {
-            if (c >= '0' && c <= '9') {
-                number = number * 10 + uint64_t(c - '0');
-                digits = true;
-            } else {
-                if (c == '%' && digits && number <= 100) progress.reached(number);
-                number = 0;
-                digits = false;
+            while (!error && done < total && in.good()) {
+                const uint64_t len = std::min<uint64_t>(pipe_block, total - done);
+                in.read(buffer.data(), (std::streamsize) len);
+                if ((uint64_t) in.gcount() != len || !write_to_descriptor(in_pipe[1], buffer.data(), len)) break;
+                done += len;
+                progress.reached(done);
             }
+
+            progress.finish();
+            close_descriptor(in_pipe[1]);
+            fed = !error && done == total;
+        });
+    }
+
+    // writes the output of the program to out_path with O_DIRECT
+    std::thread drainer;
+
+    if (output_descriptor >= 0) {
+        drainer = std::thread([&]() {
+            direct_ofstream out(out_path);
+            written = out.is_open();
+            std::string buffer;
+            resize_no_init(buffer, pipe_block);
+            int64_t num;
+
+            // the pipe is read to its end even if the file cannot be written, so the program does not block
+            while ((num = read_from_descriptor(out_pipe[0], buffer.data(), pipe_block)) > 0) {
+                if (written) out.write(buffer.data(), num);
+            }
+
+            if (out.is_open()) out.close();
+            written = written && num == 0 && out.good();
+            close_descriptor(out_pipe[0]);
+        });
+    }
+
+    if (progress_descriptor >= 0) {
+        phase_progress progress(log, 100);
+        percent_parser parser(progress);
+        char buffer[256];
+        int64_t num;
+
+        while ((num = read_from_descriptor(progress_pipe[0], buffer, sizeof(buffer))) > 0) {
+            for (int64_t i = 0; i < num; i++) parser.next((unsigned char) buffer[i]);
         }
 
         progress.finish();
-#ifdef _WIN32
-        status = _pclose(pipe);
-#else
-        status = pclose(pipe);
-#endif
+        close_descriptor(progress_pipe[0]);
     }
+
+    if (feeder.joinable()) feeder.join();
+    if (drainer.joinable()) drainer.join();
+    int status = -1;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    std::signal(SIGPIPE, previous);
 
     if (measured && peak != nullptr) {
         std::ifstream peak_file(peak_path);
@@ -470,7 +682,8 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
         if (peak_file >> bytes) *peak = bytes;
     }
 
-    return status == 0;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 && fed && written;
+#endif
 }
 
 /**

@@ -56,10 +56,10 @@ protected:
 
     /* the first index of each level in data: [0..num_levels()] lvl_beg[l] = index in data of the first entry of
        level l; lvl_beg[num_levels()] = number of entries of all levels */
-    std::vector<uint64_t> lvl_beg;
+    no_init_vector<uint64_t> lvl_beg;
 
     // the lengths of the levels: [0..num_levels()-1] lvl_len[l] = number of entries of level l; lvl_len[0] = k
-    std::vector<uint64_t> lvl_len;
+    no_init_vector<uint64_t> lvl_len;
 
     /* the levels, from the lowest (the values) to the root (one entry): for l in [0..num_levels()-1] and
        i in [0..lvl_len[l]-1], data[lvl_beg[l] + i] = minimum of the values [i * tau^l .. min((i + 1) * tau^l, k) - 1];

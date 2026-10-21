@@ -393,4 +393,106 @@ inline void direct_reader::read_block_at(uint64_t pos)
     if (pos < file_length && buffer_end <= pos) throw std::runtime_error("direct_reader: cannot read the file");
 }
 
+// ############################# direct_positioned_file #############################
+
+inline void direct_positioned_file::open_file(const std::string& file_path, uint64_t file_length)
+{
+    close_file();
+    path = file_path;
+    length = file_length;
+    fd = open_direct_or_buffered(path, platform::file_access::write, direct);
+    if (fd < 0) throw std::runtime_error("cannot create " + path);
+    if (!direct) advise_uncached(fd);
+    // the threads write far apart (see platform::make_sparse)
+    platform::make_sparse(fd);
+    if (!platform::set_size(fd, length)) throw std::runtime_error("cannot resize " + path);
+}
+
+inline void direct_positioned_file::write_through(const char* data, uint64_t size, uint64_t offset)
+{
+    if (!pwrite_fully(fd, data, size, offset)) throw std::runtime_error("cannot write " + path);
+}
+
+inline void direct_positioned_file::write_partial(const char* data, uint64_t beg, uint64_t end)
+{
+    std::lock_guard<std::mutex> guard(mutex);
+
+    while (beg < end) {
+        const uint64_t sector_beg = (beg / sector) * sector;
+        const uint64_t num = std::min(end, sector_beg + sector) - beg;
+        auto it = partial.find(sector_beg);
+
+        if (it == partial.end()) {
+            char* bytes = (char*) allocate_aligned(sector);
+            std::memset(bytes, 0, sector);
+            it = partial.emplace(sector_beg, partial_sector { bytes, 0 }).first;
+        }
+
+        std::memcpy(it->second.bytes + (beg - sector_beg), data, num);
+        it->second.written += num;
+
+        // the sector is complete once its bytes up to the end of the file are written
+        if (it->second.written == std::min(sector, length - sector_beg)) {
+            write_through(it->second.bytes, sector, sector_beg);
+            platform::free_aligned(it->second.bytes);
+            partial.erase(it);
+        }
+
+        data += num;
+        beg += num;
+    }
+}
+
+inline void direct_positioned_file::write(const char* data, uint64_t size, uint64_t offset)
+{
+    if (size == 0) return;
+    if (offset > length || size > length - offset) throw std::invalid_argument("a write ends after " + path);
+    const uint64_t end = offset + size;
+
+    if (!direct) {
+        write_through(data, size, offset);
+        return;
+    }
+
+    // [first, last) are the sectors the write covers completely
+    const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
+    const uint64_t last = std::max(first, (end / sector) * sector);
+    if (offset < first) write_partial(data, offset, first);
+    if (last < end) write_partial(data + (last - offset), last, end);
+    if (first == last) return;
+    const char* sectors = data + (first - offset); // the bytes of the complete sectors
+
+    if (uintptr_t(sectors) % sector == 0) {
+        write_through(sectors, last - first, first);
+        return;
+    }
+
+    std::unique_ptr<char, decltype(&platform::free_aligned)> buffer(
+        (char*) allocate_aligned(std::min(copy_buffer_bytes, last - first)), &platform::free_aligned);
+
+    for (uint64_t pos = first; pos < last; pos += copy_buffer_bytes) {
+        const uint64_t num = std::min(copy_buffer_bytes, last - pos);
+        std::memcpy(buffer.get(), sectors + (pos - first), num);
+        write_through(buffer.get(), num, pos);
+    }
+}
+
+inline bool direct_positioned_file::close_file()
+{
+    if (fd < 0) return true;
+    bool ok = true;
+
+    for (auto& [sector_beg, s] : partial) {
+        ok = pwrite_fully(fd, s.bytes, sector, sector_beg) && ok;
+        platform::free_aligned(s.bytes);
+    }
+
+    partial.clear();
+    ok = platform::set_size(fd, length) && ok;
+    if (!direct) drop_range_from_page_cache(fd, 0, length);
+    ok = platform::close(fd) == 0 && ok;
+    fd = -1;
+    return ok;
+}
+
 #endif // STRING_UTILS_MISC_FILES_TPP

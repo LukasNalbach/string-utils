@@ -27,7 +27,7 @@
 /**
  * @file compressor_cli.hpp
  * @brief the command-line interface of a compressor:
- *        "<tool> [options] <input_file>" compresses <input_file> into <base_name>.<tool>[.<postcompressor>],
+ *        "<tool> [options] <input_file>" compresses <input_file> into <base_name>.<ending>[.<postcompressor>],
  *        "<tool> -d [options] <input_file>" restores it; the common options, the help, the names of the output files,
  *        the measurement file, the post-compression and the decompression of a parsing into a file
  */
@@ -66,7 +66,8 @@ inline constexpr char fasta_header_start = '>';
 
 /** @brief what a compressor supports besides the common options */
 struct compressor_spec {
-    std::string_view name; // the name of the tool, e.g. "xyz-comp"; its files end in .<name>
+    std::string_view name; // the name of the tool, e.g. "xyz-comp"
+    std::string_view ending; // the ending of its files without the dot, e.g. "xyz"
     std::string_view description; // what the tool does, e.g. "compresses a text into its LZ77 parsing"
     std::string_view default_postcompressor; // the default of -pc; empty <=> no post-compression (-pc, -<quality>)
     bool fasta = false; // whether the tool has a FASTA mode (-fasta)
@@ -77,7 +78,7 @@ struct compressor_spec {
 struct compressor_cli_t {
     bool decompress = false; // -d
     std::string path_input_file; // <input_file>
-    // compression: <base_name>.<name>[.<postcompressor>] (see -o); -d: the restored text
+    // compression: <base_name>.<ending>[.<postcompressor>] (see -o); -d: the restored text
     std::string path_output_file;
     uint64_t threads = omp_get_max_threads(); // -t
     // -pc (with -d: from the ending of <input_file>); nullptr <=> the tool does not post-compress
@@ -97,7 +98,7 @@ struct compressor_cli_t {
  */
 inline bool starts_like_fasta(const std::string& path)
 {
-    std::ifstream in(path, std::ios::binary);
+    direct_ifstream in(path);
     char first = 0;
     return in.get(first) && first == fasta_header_start;
 }
@@ -112,9 +113,10 @@ template <typename print_options_fnc_t>
 void print_compressor_help(std::ostream& out, const compressor_spec& spec, print_options_fnc_t print_options)
 {
     const std::string name(spec.name);
+    const std::string file_ending = "." + std::string(spec.ending);
     const bool with_postcompressor = !spec.default_postcompressor.empty();
-    const std::string ending = "." + name + (with_postcompressor ? ".<postcompressor>" : "");
-    const std::string ending_pattern = "." + name + (with_postcompressor ? "[.<postcompressor>]" : "");
+    const std::string ending = file_ending + (with_postcompressor ? ".<postcompressor>" : "");
+    const std::string ending_pattern = file_ending + (with_postcompressor ? "[.<postcompressor>]" : "");
     help_printer h(out, compressor_help_width);
     h.intro(name + ": " + std::string(spec.description) + ".", name + " [options] <input_file>");
     h.option("-d", "", "decompress <input_file> (*" + ending_pattern + ")");
@@ -125,7 +127,7 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
     }
 
     h.option("-o <base_name>", "a path (default: <input_file>)", "write <base_name>" + ending
-        + (with_postcompressor ? " (<base_name>." + name + " with -pc none)" : "") + "; with -d: the output file "
+        + (with_postcompressor ? " (<base_name>" + file_ending + " with -pc none)" : "") + "; with -d: the output file "
         "(default: <input_file> without " + ending_pattern + ")");
     h.option("-t <threads>", "integer >= 1 (default: all)", "number of threads");
 
@@ -176,7 +178,6 @@ template <typename read_option_fnc_t>
 void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, read_option_fnc_t read_option,
     compressor_cli_t& cli)
 {
-    const std::string name(spec.name);
     const bool with_postcompressor = !spec.default_postcompressor.empty();
     cli_arguments args(argc, argv);
     std::string postcompressor(spec.default_postcompressor); // -pc
@@ -224,7 +225,7 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
     cli.path_input_file = args.next();
     if (!std::filesystem::exists(cli.path_input_file)) throw usage_error(cli.path_input_file + " does not exist");
     if (!cli.path_ranges_file.empty() && !cli.decompress) throw usage_error("-ranges requires -d");
-    const std::string ending = "." + name;
+    const std::string ending = "." + std::string(spec.ending);
 
     if (cli.decompress) {
         // <input_file> without its endings; empty <=> it does not end in them
@@ -330,6 +331,19 @@ int run_compressor_cli(int argc, char** argv, const compressor_spec& spec, print
     });
 }
 
+/**
+ * @brief logs the size of the output file of a compressor and the compression ratio:
+ *        "output size: <size>" and "compression ratio = <input_bytes / output_bytes>"
+ * @param output_bytes the size of the output file in bytes
+ * @param input_bytes the size of the input file in bytes
+ */
+inline void log_compression_ratio(uint64_t output_bytes, uint64_t input_bytes)
+{
+    log_out() << "output size: " << format_size(output_bytes) << std::endl;
+    log_out() << "compression ratio = " << format_ratio(input_bytes / (double) std::max<uint64_t>(1, output_bytes))
+              << std::endl;
+}
+
 /** @brief the time, the peak memory usage and the setting of a post-compression */
 struct postcompression_t {
     uint64_t time_ns = 0; // the time in nanoseconds
@@ -372,7 +386,7 @@ inline postcompression_t postcompress(const compressor_cli_t& cli, const std::st
     log_phase_start(cli.log, time, "compressing with " + std::string(pc.name) + " (" + setting + ")");
 
     if (!run_postcompressor(compress_command(pc, path_archive, archive_bytes, cli.path_output_file, cli.threads,
-            result.level), path_archive, path_errors, cli.log, path_peak, &result.peak)) {
+            result.level), path_archive, cli.path_output_file, path_errors, cli.log, path_peak, &result.peak)) {
         std::filesystem::remove(cli.path_output_file, ec);
         const std::string errors = postcompressor_errors(path_errors);
         throw std::runtime_error(std::string(pc.name) + " failed" + (errors.empty() ? "" : ":\n" + errors));
@@ -419,7 +433,7 @@ inline std::vector<extract_range_t> read_ranges_file(const std::string& path)
 /**
  * @brief restores the text of a file written by a compressor that stores a parsing (or the ranges of -ranges) into
  *        the output file: decompresses the file with its postcompressor into a temporary file next to the output
- *        file, reads the parsing with decompress_for_extraction(), decompress() or load() and extracts the text
+ *        file, reads the parsing with decompress() or load() and extracts the text
  * @tparam parsing_t the type of the parsing
  * @param cli the options
  * @param result_type the value of the key "type" of the RESULT line (see -m)
@@ -460,7 +474,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
             log_phase_start(cli.log, time, "decompressing with " + std::string(pc.name));
 
             if (!run_postcompressor(decompress_command(pc, cli.path_input_file, path_archive, cli.threads),
-                    cli.path_input_file, path_errors, cli.log)) {
+                    cli.path_input_file, path_archive, path_errors, cli.log)) {
                 throw std::runtime_error(std::string(pc.name) + " failed on " + cli.path_input_file + ": "
                     + postcompressor_errors(path_errors));
             }
@@ -472,11 +486,9 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
         direct_ifstream in(path_archive);
         require_readable(in, path_archive);
 
-        // decompress_for_extraction() omits the data structures that the extraction does not use
-        if constexpr (requires { parsing.decompress_for_extraction(in, cli.threads); })
-            parsing.decompress_for_extraction(in, cli.threads);
-        else if constexpr (loads) parsing.load(in, cli.threads);
-        else parsing.decompress(in, cli.threads);
+        if constexpr (!loads) parsing.decompress(in, cli.threads);
+        else if constexpr (requires { parsing.load(in, cli.threads); }) parsing.load(in, cli.threads);
+        else parsing.load(in);
 
         log_phase_end(cli.log, time);
     }
