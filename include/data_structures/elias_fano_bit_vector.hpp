@@ -91,15 +91,19 @@ public:
 
     /**
      * @brief builds the bit vector from the positions of its ones
+     * @tparam alloc_t allocator type of positions
      * @param positions positions of the ones in increasing order
      * @param universe length of the bit vector (larger than each position)
      * @param num_threads number of threads to use
      */
-    elias_fano_bit_vector(const std::vector<uint64_t>& positions, uint64_t universe, uint64_t num_threads = 1)
+    template <typename alloc_t>
+    elias_fano_bit_vector(const std::vector<uint64_t, alloc_t>& positions, uint64_t universe,
+        uint64_t num_threads = 1)
         : _size(universe), _num_ones(positions.size())
     {
         if (!positions.empty()) {
-            _ef = sux::bits::EliasFano<>(positions, universe, num_threads);
+            _ef = sux::bits::EliasFano<>([&](uint64_t i) { return uint64_t(positions[i]); }, positions.size(),
+                universe, num_threads);
             advise_huge_pages_for_arrays();
         }
     }
@@ -155,7 +159,7 @@ public:
         _num_ones = ones_before[num_chunks];
 
         // write the positions of the ones of each chunk
-        std::vector<uint64_t> positions;
+        no_init_vector<uint64_t> positions;
         resize_no_init(positions, _num_ones);
 
         #pragma omp parallel for num_threads(num_threads)
@@ -173,7 +177,7 @@ public:
         }
 
         if (_num_ones > 0) {
-            _ef = sux::bits::EliasFano<>(positions, _size, num_threads);
+            _ef = sux::bits::EliasFano<>([&](uint64_t i) { return positions[i]; }, _num_ones, _size, num_threads);
             advise_huge_pages_for_arrays();
         }
     }

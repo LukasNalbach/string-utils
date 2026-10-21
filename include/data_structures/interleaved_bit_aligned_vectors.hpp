@@ -89,7 +89,7 @@ protected:
        [i * width_entry + offsets[v] .. i * width_entry + offsets[v] + widths[v] - 1] store entry i of vector v (bit
        j is bit j % 8 of byte j / 8); byte_size(capacity_vectors) bytes, followed by padding bytes (empty if
        capacity_vectors = 0) */
-    std::vector<char> data_vectors;
+    no_init_vector<char> data_vectors;
 
     // the widths of the vectors: [0..num_vectors-1] widths[v] = width (in bits) of vector v (0: v is unused)
     std::array<uint8_t, num_vectors> widths {};

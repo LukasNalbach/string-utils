@@ -622,7 +622,7 @@ index 0000000..e1d5480
 +#endif
 diff --git a/include/libsais40.hpp b/include/libsais40.hpp
 new file mode 100644
-index 0000000..a54cd5c
+index 0000000..905cfa6
 --- /dev/null
 +++ b/include/libsais40.hpp
 @@ -0,0 +1,170 @@
@@ -724,7 +724,7 @@ index 0000000..a54cd5c
 +        }
 +
 +        // libsais40_long expects a text of 40-bit integers; a text of another type is copied to T_40
-+        std::vector<uint40_t> T_40;
++        no_init_vector<uint40_t> T_40;
 +        const uint40_t* T_entries;
 +
 +        if constexpr (std::is_same_v<sym_t, uint40_t>) {

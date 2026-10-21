@@ -61,9 +61,7 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
     if (input_size + 1 > uint64_t(std::numeric_limits<int32_t>::max()))
         throw std::runtime_error("the reference suffix array is built with the 32-bit libsais");
 
-    std::vector<int64_t> suffix_array;
-    resize_no_init(suffix_array, input_size + 1);
-    std::vector<int32_t> sa32;
+    no_init_vector<int32_t> sa32;
     resize_no_init(sa32, input_size + 1);
 
     if constexpr (sizeof(sym_t) == 1) {
@@ -98,7 +96,7 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
         using usym_t = std::make_unsigned_t<sym_t>;
 
         // the alphabet: [0..sigma-1] the distinct symbols of input as unsigned bit patterns, in increasing order
-        std::vector<usym_t> alphabet;
+        no_init_vector<usym_t> alphabet;
         resize_no_init(alphabet, input_size);
         for (uint64_t i = 0; i < input_size; i++) alphabet[i] = usym_t(symbol_bit_pattern(sym_t(input[i])));
         sort_parallel(alphabet.begin(), alphabet.end(), std::less<>(), num_threads);
@@ -109,7 +107,7 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
         for (uint64_t x = 0; x < alphabet.size(); x++) rank_of_symbol[alphabet[x]] = int64_t(x + 1);
 
         const gtl::flat_hash_map<usym_t, int64_t>& ranks = rank_of_symbol;
-        std::vector<int32_t> input_libsais;
+        no_init_vector<int32_t> input_libsais;
         resize_no_init(input_libsais, input_size + 1);
 
         #pragma omp parallel for num_threads(num_threads)
@@ -122,7 +120,7 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
         if (error != 0) throw std::runtime_error("libsais_int_omp failed with " + std::to_string(error));
     }
 
-    for (uint64_t i = 0; i <= input_size; i++) suffix_array[i] = sa32[i];
+    std::vector<int64_t> suffix_array(sa32.begin(), sa32.end());
 
     // check that each suffix array value is in [0, input_size]
     for (uint64_t i = 0; i <= input_size; i++) {

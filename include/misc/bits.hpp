@@ -127,12 +127,14 @@ inline int32_t popcount(word_t x)
 
 /**
  * @brief reads a value from a bit-packed array of 64-bit words (the value can span two words)
+ * @tparam alloc_t allocator type of the array
  * @param data the array
  * @param bit position of the first bit of the value
  * @param width number of bits of the value (for a width of 0, 0 is returned)
  * @return the value
  */
-inline uint64_t read_bits(const std::vector<uint64_t>& data, uint64_t bit, uint8_t width)
+template <typename alloc_t>
+inline uint64_t read_bits(const std::vector<uint64_t, alloc_t>& data, uint64_t bit, uint8_t width)
 {
     if (width == 0) [[unlikely]] return 0;
     uint64_t word = bit >> 6;
@@ -144,12 +146,14 @@ inline uint64_t read_bits(const std::vector<uint64_t>& data, uint64_t bit, uint8
 
 /**
  * @brief writes a value to a bit-packed array of 64-bit words (the value can span two words)
+ * @tparam alloc_t allocator type of the array
  * @param data the array; the bits the value is written to must be 0 (the value is written with OR)
  * @param bit position of the first bit of the value
  * @param width number of bits of the value (for a width of 0, nothing is written)
  * @param value the value (must fit into width bits)
  */
-inline void write_bits(std::vector<uint64_t>& data, uint64_t bit, uint8_t width, uint64_t value)
+template <typename alloc_t>
+inline void write_bits(std::vector<uint64_t, alloc_t>& data, uint64_t bit, uint8_t width, uint64_t value)
 {
     if (width == 0) [[unlikely]] return;
     uint64_t word = bit >> 6;

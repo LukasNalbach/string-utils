@@ -62,7 +62,7 @@ inline void interleaved_bit_aligned_vectors::reserve(uint64_t capacity, uint64_t
         uint64_t num_old_bytes = byte_size(capacity_vectors);
         uint64_t num_new_bytes = byte_size(capacity);
 
-        std::vector<char> new_data_vectors;
+        no_init_vector<char> new_data_vectors;
         ::resize_no_init(new_data_vectors, num_new_bytes + padding);
         advise_huge_pages(new_data_vectors.data(), num_new_bytes + padding);
 

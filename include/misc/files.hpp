@@ -38,6 +38,7 @@
 #include <sdsl/int_vector_buffer.hpp>
 #include <misc/log.hpp>
 #include <misc/platform.hpp>
+#include <misc/serialize.hpp>
 #include <misc/utils.hpp>
 #include <filesystem>
 #include <cstdlib>
@@ -50,6 +51,8 @@
 #include <new>
 #include <stdexcept>
 #include <thread>
+#include <memory>
+#include <unordered_map>
 
 // ############################# PAGE CACHE #############################
 
@@ -524,7 +527,7 @@ inline bool read_file_in_blocks(const std::string& path, uint64_t size, char* in
     if (!in.is_open()) return false;
 
     // the temporary buffer (if into is nullptr): min(block_size, max(size, 1)) bytes, the current block
-    std::vector<char> block_buffer;
+    no_init_vector<char> block_buffer;
     if (into == nullptr) resize_no_init(block_buffer, std::min<uint64_t>(block_size, std::max<uint64_t>(size, 1)));
     const uint64_t block_len = into == nullptr ? block_buffer.size() : block_size;
     uint64_t pos = 0;
@@ -725,107 +728,82 @@ public:
     }
 };
 
-// ############################# CHUNKED STREAM I/O #############################
-
 /**
- * @brief reads size bytes from the input stream into data, in chunks that fit into a 32-bit signed integer
- * @param in the input stream
- * @param data the destination buffer (must hold at least size bytes)
- * @param size the number of bytes to read
- * @param prog counts the bytes read (see phase_progress); if given, the chunks have a size of 16 MiB
+ * @brief a file of a known length that several threads write at disjoint ranges, in any order, with O_DIRECT (if the
+ *        file system does not support O_DIRECT, through the page cache, whose pages of the file are dropped when it is
+ *        closed). The whole sectors of a write are written directly; the bytes of a sector that a write covers only
+ *        partly are collected in memory until the sector is complete, and then written once. close_file writes the
+ *        sectors that are still incomplete padded with zeros and truncates the file to its length. Every byte of the
+ *        file is written at most once.
  */
-inline void read_in_chunks(std::istream& in, char* data, uint64_t size,
-    phase_progress* prog = nullptr)
-{
-    uint64_t size_left = size;
-    uint64_t bytes_to_read;
-    const uint64_t chunk = prog == nullptr ? uint64_t(INT_MAX) : 16 * 1024 * 1024;
+class direct_positioned_file {
+public:
+    // alignment in bytes of buffer addresses, file offsets and lengths with O_DIRECT
+    static constexpr uint64_t sector = direct_io_alignment;
+    // size in bytes of the aligned buffer that write copies the sectors of unaligned data through
+    static constexpr uint64_t copy_buffer_bytes = 1024 * 1024;
 
-    while (size_left > 0) {
-        bytes_to_read = std::min<uint64_t>(size_left, chunk);
-        in.read(data + (size - size_left), bytes_to_read);
-        size_left -= bytes_to_read;
-        if (prog != nullptr) prog->advance(bytes_to_read);
-    }
-}
+private:
+    // a sector that has been written only partly
+    struct partial_sector {
+        char* bytes; // the sector (aligned to sector), zero where it has not been written
+        uint64_t written; // the number of bytes written
+    };
 
-/**
- * @brief writes size bytes from data to the output stream, in chunks that fit into a 32-bit signed integer
- * @param out the output stream
- * @param data the source buffer (must hold at least size bytes)
- * @param size the number of bytes to write
- * @param prog counts the bytes written (see phase_progress); if given, the chunks have a size of 16 MiB
- */
-inline void write_in_chunks(std::ostream& out, const char* data, uint64_t size,
-    phase_progress* prog = nullptr)
-{
-    uint64_t size_left = size;
-    uint64_t bytes_to_write;
-    const uint64_t chunk = prog == nullptr ? uint64_t(INT_MAX) : 16 * 1024 * 1024;
+    std::string path; // path of the file
+    int fd = -1; // file descriptor (-1 if no file is open)
+    bool direct = false; // true <=> the file is opened with O_DIRECT
+    uint64_t length = 0; // the length of the file in bytes
+    std::mutex mutex; // protects partial
+    std::unordered_map<uint64_t, partial_sector> partial; // the partly written sectors, by their offset in the file
 
-    while (size_left > 0) {
-        bytes_to_write = std::min<uint64_t>(size_left, chunk);
-        out.write(data + (size - size_left), bytes_to_write);
-        size_left -= bytes_to_write;
-        if (prog != nullptr) prog->advance(bytes_to_write);
-    }
-}
+    // writes size bytes at an offset (with O_DIRECT: aligned data, offset and size); throws if this fails
+    void write_through(const char* data, uint64_t size, uint64_t offset);
 
-// ############################# SERIALIZATION #############################
+    // adds the bytes data[0..end-beg-1] at the offsets [beg, end) to the partly written sectors and writes the
+    // sectors that become complete
+    void write_partial(const char* data, uint64_t beg, uint64_t end);
 
-/**
- * @brief writes the size (8 bytes) and the elements of a vector of trivially copyable values to a stream
- * @tparam val_t type of the elements
- * @param out the stream
- * @param v the vector
- */
-template <typename val_t>
-inline void write_vector(std::ostream& out, const std::vector<val_t>& v)
-{
-    uint64_t size = v.size();
-    out.write((char*) &size, sizeof(uint64_t));
-    if (size != 0) out.write((const char*) v.data(), size * sizeof(val_t));
-}
+public:
+    direct_positioned_file() = default;
 
-/**
- * @brief reads a vector written by write_vector
- * @tparam val_t type of the elements
- * @param in the stream
- * @param v the vector to read into (resized)
- */
-template <typename val_t>
-inline void read_vector(std::istream& in, std::vector<val_t>& v)
-{
-    uint64_t size;
-    in.read((char*) &size, sizeof(uint64_t));
-    v.resize(size);
-    if (size != 0) in.read((char*) v.data(), size * sizeof(val_t));
-}
+    // creates a file of a given length (see open_file)
+    direct_positioned_file(const std::string& path, uint64_t length) { open_file(path, length); }
 
-/**
- * @brief writes the length (8 bytes) and the characters of a string to a stream
- * @param out the stream
- * @param str the string
- */
-inline void write_string(std::ostream& out, const std::string& str)
-{
-    const uint64_t length = str.size();
-    out.write((const char*) &length, sizeof(uint64_t));
-    out.write(str.data(), length);
-}
+    // closes the file (see close_file)
+    ~direct_positioned_file() { close_file(); }
 
-/**
- * @brief reads a string written by write_string
- * @param in the stream
- * @param str the string to read into (resized)
- */
-inline void read_string(std::istream& in, std::string& str)
-{
-    uint64_t length = 0;
-    in.read((char*) &length, sizeof(uint64_t));
-    str.resize(length);
-    in.read(str.data(), length);
-}
+    direct_positioned_file(const direct_positioned_file&) = delete;
+    direct_positioned_file& operator=(const direct_positioned_file&) = delete;
+
+    /**
+     * @brief creates (or truncates) a file and sets its length; closes the currently open file; throws
+     *        std::runtime_error if this fails
+     * @param file_path path of the file
+     * @param file_length the length of the file in bytes
+     */
+    void open_file(const std::string& file_path, uint64_t file_length);
+
+    // returns whether a file is open
+    bool is_open() const { return fd >= 0; }
+
+    // returns the length of the file in bytes
+    uint64_t size() const { return length; }
+
+    /**
+     * @brief writes bytes at an offset of the file; can be called by several threads at once. The sectors the write
+     *        covers completely are written without copying if data + (sector - offset % sector) % sector is aligned to
+     *        sector (e.g., if data is aligned to sector and offset is a multiple of sector). Throws
+     *        std::runtime_error if the write fails and std::invalid_argument if it ends after the file.
+     * @param data the bytes
+     * @param size the number of bytes
+     * @param offset the offset in the file of the first byte
+     */
+    void write(const char* data, uint64_t size, uint64_t offset);
+
+    // writes the partly written sectors, truncates the file to its length and closes it; returns whether this succeeded
+    bool close_file();
+};
 
 #include "files.tpp"
 
