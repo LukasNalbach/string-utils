@@ -1,0 +1,146 @@
+diff --git a/malloc_count.c b/malloc_count.c
+index a1deac1..cb485a6 100644
+--- a/malloc_count.c
++++ b/malloc_count.c
+@@ -38,10 +38,10 @@
+ /* user-defined options for output malloc()/free() operations to stderr */
+ 
+ static const int log_operations = 0;    /* <-- set this to 1 for log output */
+-static const size_t log_operations_threshold = 1024*1024;
++static const size_t log_operations_threshold = 1024*1024*2;
+ 
+ /* option to use gcc's intrinsics to do thread-safe statistics operations */
+-#define THREAD_SAFE_GCC_INTRINSICS      0
++#define THREAD_SAFE_GCC_INTRINSICS      1
+ 
+ /* to each allocation additional data is added for bookkeeping. due to
+  * alignment requirements, we can optionally add more than just one integer.
+@@ -64,6 +64,10 @@ static aligned_alloc_type real_aligned_alloc = NULL;
+ static free_type real_free = NULL;
+ static realloc_type real_realloc = NULL;
+ 
++static void init(void);
++
++static int mc_initializing = 0;
++
+ /* a sentinel value prefixed to each allocation */
+ static const size_t sentinel = 0xDEADC0DE;
+ 
+@@ -90,15 +94,23 @@ static void inc_count(size_t inc)
+ {
+ #if THREAD_SAFE_GCC_INTRINSICS
+     long long mycurr = __sync_add_and_fetch(&curr, inc);
+-    if (mycurr > peak) peak = mycurr;
+-    total += inc;
++
++    /* set peak to the maximum of peak and mycurr */
++    long long seen = peak;
++    while (mycurr > seen && !__sync_bool_compare_and_swap(&peak, seen, mycurr)) seen = peak;
++
++    __sync_add_and_fetch(&total, (long long) inc);
+     if (callback) callback(callback_cookie, mycurr);
+ #else
+     if ((curr += inc) > peak) peak = curr;
+     total += inc;
+     if (callback) callback(callback_cookie, curr);
+ #endif
++#if THREAD_SAFE_GCC_INTRINSICS
++    __sync_add_and_fetch(&num_allocs, 1);
++#else
+     ++num_allocs;
++#endif
+ }
+ 
+ /* decrement allocation to statistics */
+@@ -162,11 +174,23 @@ extern void* malloc(size_t size)
+ 
+     if (size == 0) return NULL;
+ 
++    if (!real_malloc && !mc_initializing) {
++        mc_initializing = 1;
++        init();
++        mc_initializing = 0;
++    }
++
+     if (real_malloc)
+     {
+         /* call real malloc procedure in libc */
+         ret = (*real_malloc)(alignment + size);
+ 
++        if (!ret) {
++            fprintf(stderr, PPREFIX "malloc(%'lld) failed (current %'lld)\n",
++                    (long long)size, (long long)curr);
++            return NULL;
++        }
++
+         inc_count(size);
+         if (log_operations && size >= log_operations_threshold) {
+             fprintf(stderr, PPREFIX "malloc(%'lld) = %p   (current %'lld)\n",
+@@ -224,6 +248,12 @@ extern void* aligned_alloc(size_t al, size_t size)
+         }
+         /* call real aligned_alloc procedure in libc */
+         ret = (*real_aligned_alloc)(al, size + alignment + extra_alignment);
++
++        if (!ret) {
++            fprintf(stderr, PPREFIX "aligned_alloc(%'lld) failed (current %'lld)\n",
++                    (long long)size, (long long)curr);
++            return NULL;
++        }
+         ret = (char*)ret + extra_alignment;
+ 
+         inc_count(size);
+@@ -277,13 +307,13 @@ extern void free(void* ptr)
+         return;
+     }
+ 
+-    ptr = (char*)ptr - alignment;
+-
+-    if (*(size_t*)((char*)ptr + alignment - sizeof(size_t)) != sentinel) {
+-        fprintf(stderr, PPREFIX
+-                "free(%p) has no sentinel !!! memory corruption?\n", ptr);
++    /* a pointer without sentinel was not allocated by the functions above, pass it to libc unchanged */
++    if (*(size_t*)((char*)ptr - sizeof(size_t)) != sentinel) {
++        (*real_free)(ptr);
++        return;
+     }
+ 
++    ptr = (char*)ptr - alignment;
+     size = *(size_t*)ptr;
+     extra_alignment = *(size_t*)(ptr + sizeof(size_t));
+     ptr = (char*)ptr - extra_alignment;
+@@ -372,6 +402,12 @@ extern void* realloc(void* ptr, size_t size)
+ 
+     newptr = (*real_realloc)(ptr, size + alignment + extra_alignment);
+ 
++    if (!newptr) {
++        fprintf(stderr, PPREFIX "realloc(%'lld) failed (current %'lld)\n",
++                (long long)size, (long long)curr);
++        return NULL;
++    }
++
+     if (log_operations && size >= log_operations_threshold)
+     {
+         if (newptr == ptr)
+@@ -393,6 +429,8 @@ static __attribute__((constructor)) void init(void)
+ {
+     char *error;
+ 
++    if (real_malloc) return;
++
+     setlocale(LC_NUMERIC, ""); /* for better readable numbers */
+ 
+     dlerror();
+@@ -424,9 +462,11 @@ static __attribute__((constructor)) void init(void)
+ 
+ static __attribute__((destructor)) void finish(void)
+ {
++    /*
+     fprintf(stderr, PPREFIX
+             "exiting, total: %'lld, peak: %'lld, current: %'lld\n",
+             total, peak, curr);
++    */
+ }
+ 
+-/*****************************************************************************/
++/*****************************************************************************/
+\ No newline at end of file

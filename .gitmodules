@@ -1,0 +1,28 @@
+[submodule "external/sdsl-lite"]
+	path = external/sdsl-lite
+	url = https://github.com/simongog/sdsl-lite.git
+[submodule "external/sux"]
+	path = external/sux
+	url = https://github.com/vigna/sux.git
+[submodule "external/malloc_count"]
+	path = external/malloc_count
+	url = https://github.com/ByteHamster-etc/malloc_count.git
+	branch = aligned_alloc
+[submodule "external/ips4o"]
+	path = external/ips4o
+	url = https://github.com/ips4o/ips4o.git
+[submodule "external/ips2ra"]
+	path = external/ips2ra
+	url = https://github.com/ips4o/ips2ra.git
+[submodule "external/libsais"]
+	path = external/libsais
+	url = https://github.com/IlyaGrebnov/libsais.git
+[submodule "external/gtl"]
+	path = external/gtl
+	url = https://github.com/greg7mdp/gtl.git
+[submodule "external/emhash"]
+	path = external/emhash
+	url = https://github.com/ktprime/emhash.git
+[submodule "external/googletest"]
+	path = external/googletest
+	url = https://github.com/google/googletest.git

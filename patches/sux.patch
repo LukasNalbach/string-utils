@@ -1,0 +1,1341 @@
+diff --git a/sux/bits/EliasFano.hpp b/sux/bits/EliasFano.hpp
+index 2a4c331..9e4fe87 100644
+--- a/sux/bits/EliasFano.hpp
++++ b/sux/bits/EliasFano.hpp
+@@ -32,6 +32,9 @@
+ #include "SimpleSelectHalf.hpp"
+ #include "SimpleSelectZeroHalf.hpp"
+ #include <cstdint>
++#include <istream>
++#include <numeric>
++#include <ostream>
+ #include <vector>
+ 
+ namespace sux::bits {
+@@ -66,7 +69,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 
+ 	__inline static void set(util::Vector<uint64_t, AT> &bits, const uint64_t pos) { bits[pos / 64] |= 1ULL << pos % 64; }
+ 
+-	__inline static uint64_t get_bits(util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width) {
++	__inline static uint64_t get_bits(const util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width) {
+ 		const int start_word = start / 64;
+ 		const int start_bit = start % 64;
+ 		const int total_offset = start_bit + width;
+@@ -92,6 +95,10 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 	}
+ 
+   public:
++	/** Creates an empty instance (see load()). */
++	EliasFano() : num_bits(0), num_ones(0), l(0), block_size(0), block_length(0), block_size_mask(0),
++		lower_l_bits_mask(0), ones_step_l(0), msbs_step_l(0), compressor(0) {}
++
+ 	/** Creates a new instance using a given bit vector.
+ 	 *
+ 	 * Note that the bit vector is read only at construction time.
+@@ -173,9 +180,28 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 	 *
+ 	 * @param ones a list of positions of the ones in a bit vector.
+ 	 * @param num_bits the length (in bits) of the bit vector.
++	 * @param threads the number of threads to use.
+ 	 */
+-	EliasFano(const std::vector<uint64_t> ones, const uint64_t num_bits) {
+-		num_ones = ones.size();
++	EliasFano(const std::vector<uint64_t> &ones, const uint64_t num_bits, const uint64_t threads = 1) {
++		build([&ones](uint64_t i) { return ones[i]; }, ones.size(), num_bits, threads);
++	}
++
++	/** Creates a new instance using a function returning the positions of the ones in a bit vector.
++	 *
++	 * @param read a function returning the position of the i-th one, for 0 <= i < num_ones; the positions
++	 * must be increasing. With more than one thread, read is called concurrently.
++	 * @param num_ones the number of ones.
++	 * @param num_bits the length (in bits) of the bit vector.
++	 * @param threads the number of threads to use.
++	 */
++	template <typename read_fnc_t> EliasFano(read_fnc_t read, const uint64_t num_ones, const uint64_t num_bits, const uint64_t threads = 1) {
++		build(read, num_ones, num_bits, threads);
++	}
++
++  private:
++	/** Builds the structure; read(i) returns the position of the i-th one (see the constructors above). */
++	template <typename read_fnc_t> void build(read_fnc_t read, const uint64_t num_ones, const uint64_t num_bits, const uint64_t threads = 1) {
++		this->num_ones = num_ones;
+ 		this->num_bits = num_bits;
+ 		l = num_ones == 0 ? 0 : max(0, lambda_safe(num_bits / num_ones));
+ 
+@@ -190,9 +216,38 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 		lower_bits.size((num_ones * l + 63) / 64 + 2 * (l == 0));
+ 		upper_bits.size(((num_ones + (num_bits >> l) + 1) + 63) / 64);
+ 
+-		for (uint64_t i = 0; i < num_ones; i++) {
+-			if (l != 0) set_bits(lower_bits, i * l, l, ones[i] & lower_bits_mask);
+-			set(upper_bits, (ones[i] >> l) + i);
++		// Chunk t contains the entries [chunk_beg[t], chunk_beg[t + 1]). The lower bits of each chunk start
++		// at a word boundary (chunk_beg[t] is a multiple of 64 / gcd(l, 64)). The upper bits of a chunk are
++		// collected word by word and OR-ed into upper_bits atomically (two chunks can share a word).
++		const uint64_t chunks = threads <= 1 ? 1 : threads;
++		const uint64_t stride = l == 0 ? 1 : 64 / std::gcd(uint64_t(l), UINT64_C(64));
++		std::vector<uint64_t> chunk_beg(chunks + 1);
++
++		for (uint64_t t = 0; t < chunks; t++) chunk_beg[t] = ((t * num_ones) / chunks / stride) * stride;
++		chunk_beg[chunks] = num_ones;
++		for (uint64_t t = 1; t <= chunks; t++) chunk_beg[t] = max(chunk_beg[t], chunk_beg[t - 1]);
++
++		uint64_t *const upper_words = &upper_bits;
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++		for (uint64_t t = 0; t < chunks; t++) {
++			uint64_t word_idx = 0, word = 0;
++
++			for (uint64_t i = chunk_beg[t]; i < chunk_beg[t + 1]; i++) {
++				const uint64_t one = read(i);
++				if (l != 0) set_bits(lower_bits, i * l, l, one & lower_bits_mask);
++				const uint64_t at = (one >> l) + i;
++
++				if (at / 64 != word_idx) {
++					if (word != 0) __atomic_fetch_or(&upper_words[word_idx], word, __ATOMIC_RELAXED);
++					word_idx = at / 64;
++					word = 0;
++				}
++
++				word |= 1ULL << (at % 64);
++			}
++
++			if (word != 0) __atomic_fetch_or(&upper_words[word_idx], word, __ATOMIC_RELAXED);
+ 		}
+ 
+ #ifdef DEBUG
+@@ -200,17 +255,25 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 		printf("First upper: %016llx %016llx %016llx %016llx\n", upper_bits[0], upper_bits[1], upper_bits[2], upper_bits[3]);
+ #endif
+ 
+-		select_upper = SimpleSelectHalf(&upper_bits, num_ones + (num_bits >> l) + 1);
+-		selectz_upper = SimpleSelectZeroHalf(&upper_bits, num_ones + (num_bits >> l) + 1);
++		init_derived(threads);
++	}
++
++  public:
++
++	/** Builds the select structures over the upper bits and the masks used by the queries from num_bits,
++	 *  num_ones, l and the two bit arrays.
++	 *
++	 * @param threads the number of threads to use.
++	 */
++	void init_derived(const uint64_t threads = 1) {
++		select_upper = SimpleSelectHalf(&upper_bits, num_ones + (num_bits >> l) + 1, threads);
++		selectz_upper = SimpleSelectZeroHalf(&upper_bits, num_ones + (num_bits >> l) + 1, threads);
+ 
+ 		block_size = 0;
+ 		do ++block_size;
+ 		while (block_size * l + block_size <= 64 && block_size <= l);
+ 		block_size--;
+ 
+-#ifdef DEBUG
+-		printf("Block size: %d\n", block_size);
+-#endif
+ 		block_size_mask = (1ULL << block_size) - 1;
+ 		block_length = block_size * l;
+ 
+@@ -226,7 +289,41 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 		lower_l_bits_mask = (1ULL << l) - 1;
+ 	}
+ 
+-	uint64_t rank(const size_t k) {
++	/** Writes num_bits, num_ones, l and the two bit arrays to an output stream. */
++	void serialize(std::ostream &os) const {
++		os.write((char *)&num_bits, sizeof(num_bits));
++		os.write((char *)&num_ones, sizeof(num_ones));
++		int l_ = l;
++		os.write((char *)&l_, sizeof(l_));
++		uint64_t lower_words = lower_bits.size(), upper_words = upper_bits.size();
++		os.write((char *)&lower_words, sizeof(lower_words));
++		os.write((char *)&upper_words, sizeof(upper_words));
++		if (lower_words) os.write((char *)&lower_bits, lower_words * sizeof(uint64_t));
++		if (upper_words) os.write((char *)&upper_bits, upper_words * sizeof(uint64_t));
++	}
++
++	/** Reads a structure written by serialize() and builds the select structures over the upper bits.
++	 *
++	 * @param is an input stream.
++	 * @param threads the number of threads to use.
++	 */
++	void load(std::istream &is, const uint64_t threads = 1) {
++		is.read((char *)&num_bits, sizeof(num_bits));
++		is.read((char *)&num_ones, sizeof(num_ones));
++		int l_;
++		is.read((char *)&l_, sizeof(l_));
++		l = l_;
++		uint64_t lower_words, upper_words;
++		is.read((char *)&lower_words, sizeof(lower_words));
++		is.read((char *)&upper_words, sizeof(upper_words));
++		lower_bits.size(lower_words);
++		upper_bits.size(upper_words);
++		if (lower_words) is.read((char *)&lower_bits, lower_words * sizeof(uint64_t));
++		if (upper_words) is.read((char *)&upper_bits, upper_words * sizeof(uint64_t));
++		init_derived(threads);
++	}
++
++	uint64_t rank(const size_t k) const {
+ 		if (num_ones == 0) return 0;
+ 		if (k >= num_bits) return num_ones;
+ #ifdef DEBUG
+@@ -318,7 +415,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ #endif
+ 	}
+ 
+-	size_t select(const uint64_t rank) {
++	size_t select(const uint64_t rank) const {
+ #ifdef DEBUG
+ 		printf("Selecting %lld...\n", rank);
+ #endif
+@@ -343,10 +440,18 @@ template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public
+ 	size_t size() const { return num_bits; }
+ 
+ 	/** Returns an estimate of the size in bits of this structure. */
+-	uint64_t bitCount() {
++	uint64_t bitCount() const {
+ 		return upper_bits.bitCount() - sizeof(upper_bits) * 8 + lower_bits.bitCount() - sizeof(lower_bits) * 8 + select_upper.bitCount() - sizeof(select_upper) * 8 + selectz_upper.bitCount() -
+ 			   sizeof(selectz_upper) * 8 + sizeof(*this) * 8;
+ 	}
++
++	/** Calls f(pointer, size in bytes) for each allocated array of this structure. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		lower_bits.for_each_backing_array(f);
++		upper_bits.for_each_backing_array(f);
++		select_upper.for_each_backing_array(f);
++		selectz_upper.for_each_backing_array(f);
++	}
+ };
+ 
+ } // namespace sux::bits
+diff --git a/sux/bits/Rank.hpp b/sux/bits/Rank.hpp
+index 874fb88..fd6b659 100644
+--- a/sux/bits/Rank.hpp
++++ b/sux/bits/Rank.hpp
+@@ -52,7 +52,7 @@ class Rank {
+ 	 * @param pos A position from 0 to size() (included).
+ 	 * @return the number of ones from the start of the bit vector up to the given position (excluded).
+ 	 */
+-	virtual uint64_t rank(std::size_t pos) = 0;
++	virtual uint64_t rank(std::size_t pos) const = 0;
+ 
+ 	/** Returns the number of ones between two given positions.
+ 	 *
+@@ -60,7 +60,7 @@ class Rank {
+ 	 * @param to An ending position from `from` to size() (included).
+ 	 * @return the number of ones from the starting position (included) to the ending position (excluded).
+ 	 */
+-	uint64_t rank(std::size_t from, std::size_t to) { return rank(to) - rank(from); }
++	uint64_t rank(std::size_t from, std::size_t to) const { return rank(to) - rank(from); }
+ 
+ 	/** Returns the number of zeros before the given posistion.
+ 	 *
+diff --git a/sux/bits/Rank9.hpp b/sux/bits/Rank9.hpp
+index 35b5ac7..4bac2d7 100644
+--- a/sux/bits/Rank9.hpp
++++ b/sux/bits/Rank9.hpp
+@@ -97,7 +97,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class Rank9 : public Ran
+ 		assert(num_ones <= num_bits);
+ 	}
+ 
+-	uint64_t rank(const size_t k) {
++	uint64_t rank(const size_t k) const {
+ 		const uint64_t word = k / 64;
+ 		const uint64_t block = word / 4 & ~1;
+ 		const int offset = word % 8 - 1;
+diff --git a/sux/bits/Rank9Sel.hpp b/sux/bits/Rank9Sel.hpp
+index 1a43a26..c376929 100644
+--- a/sux/bits/Rank9Sel.hpp
++++ b/sux/bits/Rank9Sel.hpp
+@@ -193,7 +193,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class Rank9Sel : public
+ 				}
+ 	}
+ 
+-	size_t select(const uint64_t rank) {
++	size_t select(const uint64_t rank) const {
+ 		const uint64_t inventory_index_left = rank >> log2_ones_per_inventory;
+ 		assert(inventory_index_left <= inventory_size);
+ 
+diff --git a/sux/bits/Select.hpp b/sux/bits/Select.hpp
+index 3bd9904..4dbd879 100644
+--- a/sux/bits/Select.hpp
++++ b/sux/bits/Select.hpp
+@@ -46,7 +46,7 @@ class Select {
+ 	 * @return the position of the zero with given rank;
+ 	 * the result is undefined if no zero of the given rank exists.
+ 	 */
+-	virtual std::size_t select(uint64_t rank) = 0;
++	virtual std::size_t select(uint64_t rank) const = 0;
+ };
+ 
+ } // namespace sux
+diff --git a/sux/bits/SimpleSelect.hpp b/sux/bits/SimpleSelect.hpp
+index c8d6c8a..e222230 100644
+--- a/sux/bits/SimpleSelect.hpp
++++ b/sux/bits/SimpleSelect.hpp
+@@ -29,6 +29,7 @@
+ #pragma once
+ 
+ #include "../support/common.hpp"
++#include "../util/ParallelBuild.hpp"
+ #include "../util/Vector.hpp"
+ #include "Select.hpp"
+ #include <cstdint>
+@@ -63,7 +64,11 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ 	uint64_t num_words, inventory_size, exact_spill_size, num_ones;
+ 
+   public:
+-	SimpleSelect() {}
++    SimpleSelect() = default;
++    SimpleSelect(SimpleSelect&& other) = default;
++    SimpleSelect(const SimpleSelect& other) = default;
++    SimpleSelect& operator=(SimpleSelect&& other) = default;
++    SimpleSelect& operator=(const SimpleSelect& other) = default;
+ 
+ 	/** Creates a new instance using a given bit vector.
+ 	 *
+@@ -71,13 +76,17 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ 	 * @param num_bits the length (in bits) of the bit vector.
+ 	 * @param max_log2_longwords_per_subinventory the number of words per subinventory:
+ 	 * a larger value yields a faster map that uses more space; typical values are between 0 and 3.
++	 * @param threads the number of threads to use.
+ 	 */
+-	SimpleSelect(const uint64_t *const bits, const uint64_t num_bits, const int max_log2_longwords_per_subinventory) : bits(bits) {
++	SimpleSelect(const uint64_t *const bits, const uint64_t num_bits, const int max_log2_longwords_per_subinventory,
++				 const uint64_t threads = 1)
++		: bits(bits) {
+ 		num_words = (num_bits + 63) / 64;
+ 
+ 		// Init rank/select structure
+-		uint64_t c = 0;
+-		for (uint64_t i = 0; i < num_words; i++) c += __builtin_popcountll(bits[i]);
++		std::vector<uint64_t> first_word, ones_before;
++		const uint64_t chunks = util::build_count_by_chunk<false>(bits, num_words, threads, first_word, ones_before);
++		const uint64_t c = ones_before[chunks];
+ 		num_ones = c;
+ 
+ 		assert(c <= num_bits);
+@@ -108,21 +117,11 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ #endif
+ 
+ 		inventory.size(inventory_size * longwords_per_inventory + 1);
+-		const int64_t *end_of_inventory = &inventory + inventory_size * longwords_per_inventory + 1;
+-
+-		uint64_t d = 0;
+ 
+ 		// First phase: we build an inventory for each one out of ones_per_inventory.
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (bits[i] & 1ULL << j) {
+-					if ((d & ones_per_inventory_mask) == 0) inventory[(d >> log2_ones_per_inventory) * longwords_per_inventory] = i * 64 + j;
+-					d++;
+-				}
+-			}
++		util::build_first_level<false>(bits, num_bits, num_words, c, log2_ones_per_inventory, longwords_per_inventory, &inventory, first_word,
++									   ones_before, chunks, threads);
+ 
+-		assert(c == d);
+ 		inventory[inventory_size * longwords_per_inventory] = num_bits;
+ 
+ #ifdef DEBUG
+@@ -132,84 +131,66 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ 		// If ones_per_inventory = 1 we don't need to build subinventories;
+ 		// this case is managed in the selection code by a test.
+ 		if (ones_per_inventory > 1) {
+-			d = 0;
+-			int ones;
+-			uint64_t spilled = 0, exact = 0, start, span, inventory_index;
+-
+-			for (uint64_t i = 0; i < num_words; i++)
+-				// We estimate the subinventory and exact spill size
+-				for (int j = 0; j < 64; j++) {
+-					if (i * 64 + j >= num_bits) break;
+-					if (bits[i] & 1ULL << j) {
+-						if ((d & ones_per_inventory_mask) == 0) {
+-							inventory_index = d >> log2_ones_per_inventory;
+-							start = inventory[inventory_index * longwords_per_inventory];
+-							span = inventory[(inventory_index + 1) * longwords_per_inventory] - start;
+-							ones = min(c - d, (uint64_t)ones_per_inventory);
+-
+-							assert(start + span == num_bits || ones == ones_per_inventory);
+-
+-							// We accumulate space for exact pointers ONLY if necessary.
+-							if (span >= (1 << 16)) {
+-								exact += ones;
+-								if (ones_per_sub64 > 1) spilled += ones;
+-							}
+-						}
+-						d++;
+-					}
+-				}
++			// start[k] and span[k], the position of the first one and the span of inventory k; spill_base[k],
++			// the number of entries in exact_spill before inventory k. The spans are read from the first
++			// level before the loop below sets the top bit of its entries.
++			std::vector<uint64_t> start(inventory_size), span(inventory_size), spill_base(inventory_size + 1, 0);
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++			for (uint64_t k = 0; k < inventory_size; k++) {
++				start[k] = uint64_t(inventory[k * longwords_per_inventory]);
++				span[k] = uint64_t(inventory[(k + 1) * longwords_per_inventory]) - start[k];
++				const uint64_t ones = min(c - k * (uint64_t)ones_per_inventory, (uint64_t)ones_per_inventory);
++
++				assert(start[k] + span[k] == num_bits || ones == (uint64_t)ones_per_inventory);
++
++				// We accumulate space for exact pointers ONLY if necessary.
++				spill_base[k + 1] = (span[k] >= (1 << 16) && ones_per_sub64 > 1) ? ones : 0;
++			}
++
++			for (uint64_t k = 0; k < inventory_size; k++) spill_base[k + 1] += spill_base[k];
+ 
+ #ifdef DEBUG
+-			printf("Spilled entries: %" PRId64 " exact: %" PRId64 "\n", spilled, exact);
++			printf("Spilled entries: %" PRId64 "\n", spill_base[inventory_size]);
+ #endif
+ 
+-			exact_spill_size = spilled;
++			exact_spill_size = spill_base[inventory_size];
+ 			exact_spill.size(exact_spill_size);
+ 
+-			uint16_t *p16;
+-			int64_t *p64;
+-			int offset;
+-			spilled = 0;
+-			d = 0;
+-
+-			for (uint64_t i = 0; i < num_words; i++)
+-				for (int j = 0; j < 64; j++) {
+-					if (i * 64 + j >= num_bits) break;
+-					if (bits[i] & 1ULL << j) {
+-						if ((d & ones_per_inventory_mask) == 0) {
+-							inventory_index = d >> log2_ones_per_inventory;
+-							start = inventory[inventory_index * longwords_per_inventory];
+-							span = inventory[(inventory_index + 1) * longwords_per_inventory] - start;
+-							p64 = &inventory[inventory_index * longwords_per_inventory + 1];
+-							p16 = (uint16_t *)p64;
+-							offset = 0;
++#pragma omp parallel for num_threads(threads) schedule(static)
++			for (uint64_t k = 0; k < inventory_size; k++) {
++				int64_t *const p64 = &inventory[k * longwords_per_inventory + 1];
++				uint16_t *const p16 = (uint16_t *)p64;
++				const uint64_t d_beg = k * (uint64_t)ones_per_inventory;
++				const uint64_t d_end = c < d_beg + ones_per_inventory ? c : d_beg + ones_per_inventory;
++				uint64_t spilled = spill_base[k];
++				uint64_t offset = 0;
++
++				uint64_t i = start[k] / 64;
++				uint64_t word = util::build_masked_word<false>(bits, i, num_bits) & (~UINT64_C(0) << (start[k] % 64));
++
++				for (uint64_t d = d_beg; d < d_end; d++) {
++					if (word == 0) word = util::build_next_word<false>(bits, i, num_bits);
++					if (word == 0) break;
++
++					const uint64_t at = i * 64 + __builtin_ctzll(word);
++
++					if (span[k] < (1 << 16)) {
++						if ((d & ones_per_sub16_mask) == 0) p16[offset++] = at - start[k];
++					} else if (ones_per_sub64 == 1) {
++						p64[offset++] = at;
++					} else {
++						if (d == d_beg) {
++							inventory[k * longwords_per_inventory] |= 1ULL << 63;
++							p64[0] = spill_base[k];
+ 						}
+ 
+-						if (span < (1 << 16)) {
+-							assert(i * 64 + j - start <= (1 << 16));
+-							if ((d & ones_per_sub16_mask) == 0) {
+-								assert(offset < longwords_per_subinventory * 4);
+-								assert(p16 + offset < (uint16_t *)end_of_inventory);
+-								p16[offset++] = i * 64 + j - start;
+-							}
+-						} else {
+-							if (ones_per_sub64 == 1) {
+-								assert(p64 + offset < end_of_inventory);
+-								p64[offset++] = i * 64 + j;
+-							} else {
+-								assert(p64 < end_of_inventory);
+-								if ((d & ones_per_inventory_mask) == 0) {
+-									inventory[inventory_index * longwords_per_inventory] |= 1ULL << 63;
+-									p64[0] = spilled;
+-								}
+-								assert(spilled < exact_spill_size);
+-								exact_spill[spilled++] = i * 64 + j;
+-							}
+-						}
+-
+-						d++;
++						exact_spill[spilled++] = at;
+ 					}
++
++					word &= word - 1;
+ 				}
++			}
+ 		}
+ #ifdef DEBUG
+ 		// printf("First inventories: %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 "\n", inventory[0],
+@@ -225,7 +206,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ #endif
+ 	}
+ 
+-	size_t select(const uint64_t rank) {
++	size_t select(const uint64_t rank) const {
+ #ifdef DEBUG
+ 		printf("Selecting %" PRId64 "\n...", rank);
+ #endif
+@@ -279,6 +260,63 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelect : pub
+ 
+ 	/** Returns an estimate of the size (in bits) of this structure. */
+ 	size_t bitCount() const { return inventory.bitCount() - sizeof(inventory) * 8 + exact_spill.bitCount() - sizeof(exact_spill) * 8 + sizeof(*this) * 8; }
++
++	/** Calls f(pointer, size in bytes) for each allocated array of this structure. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		inventory.for_each_backing_array(f);
++		exact_spill.for_each_backing_array(f);
++	}
++
++
++	void set_vector(const uint64_t *bits) {
++		this->bits = bits;
++	}
++
++	void serialize(std::ostream& out) const {
++        out << inventory;
++        out << exact_spill;
++		out.write((char*)&log2_ones_per_inventory,sizeof(int));
++		out.write((char*)&log2_ones_per_sub16,sizeof(int));
++		out.write((char*)&log2_ones_per_sub64,sizeof(int));
++		out.write((char*)&log2_longwords_per_subinventory,sizeof(int));
++		out.write((char*)&ones_per_inventory,sizeof(int));
++		out.write((char*)&ones_per_sub16,sizeof(int));
++		out.write((char*)&ones_per_sub64,sizeof(int));
++		out.write((char*)&longwords_per_subinventory,sizeof(int));
++		out.write((char*)&longwords_per_inventory,sizeof(int));
++		out.write((char*)&ones_per_inventory_mask,sizeof(int));
++		out.write((char*)&ones_per_sub16_mask,sizeof(int));
++		out.write((char*)&ones_per_sub64_mask,sizeof(int));
++		out.write((char*)&num_words,sizeof(uint64_t));
++		out.write((char*)&inventory_size,sizeof(uint64_t));
++		out.write((char*)&exact_spill_size,sizeof(uint64_t));
++		out.write((char*)&num_ones,sizeof(uint64_t));
++    }
++	
++    void load(std::istream& in) {
++        in >> inventory;
++        in >> exact_spill;
++		in.read((char*)&log2_ones_per_inventory,sizeof(int));
++		in.read((char*)&log2_ones_per_sub16,sizeof(int));
++		in.read((char*)&log2_ones_per_sub64,sizeof(int));
++		in.read((char*)&log2_longwords_per_subinventory,sizeof(int));
++		in.read((char*)&ones_per_inventory,sizeof(int));
++		in.read((char*)&ones_per_sub16,sizeof(int));
++		in.read((char*)&ones_per_sub64,sizeof(int));
++		in.read((char*)&longwords_per_subinventory,sizeof(int));
++		in.read((char*)&longwords_per_inventory,sizeof(int));
++		in.read((char*)&ones_per_inventory_mask,sizeof(int));
++		in.read((char*)&ones_per_sub16_mask,sizeof(int));
++		in.read((char*)&ones_per_sub64_mask,sizeof(int));
++		in.read((char*)&num_words,sizeof(uint64_t));
++		in.read((char*)&inventory_size,sizeof(uint64_t));
++		in.read((char*)&exact_spill_size,sizeof(uint64_t));
++		in.read((char*)&num_ones,sizeof(uint64_t));
++    }
++
++	uint64_t size_in_bytes() const {
++		return sizeof(this)+inventory.size_in_bytes()+exact_spill.size_in_bytes();
++	}
+ };
+ 
+ } // namespace sux::bits
+diff --git a/sux/bits/SimpleSelectHalf.hpp b/sux/bits/SimpleSelectHalf.hpp
+index ee12a29..d3947ca 100644
+--- a/sux/bits/SimpleSelectHalf.hpp
++++ b/sux/bits/SimpleSelectHalf.hpp
+@@ -29,6 +29,7 @@
+ #pragma once
+ 
+ #include "../support/common.hpp"
++#include "../util/ParallelBuild.hpp"
+ #include "../util/Vector.hpp"
+ #include "Select.hpp"
+ #include <cstdint>
+@@ -77,14 +78,16 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectHalf {
+ 	 *
+ 	 * @param bits a bit vector of 64-bit words.
+ 	 * @param num_bits the length (in bits) of the bit vector.
++	 * @param threads the number of threads to use.
+ 	 */
+ 
+-	SimpleSelectHalf(const uint64_t *const bits, const uint64_t num_bits) : bits(bits) {
++	SimpleSelectHalf(const uint64_t *const bits, const uint64_t num_bits, const uint64_t threads = 1) : bits(bits) {
+ 		num_words = (num_bits + 63) / 64;
+ 
+ 		// Init rank/select structure
+-		uint64_t c = 0;
+-		for (uint64_t i = 0; i < num_words; i++) c += __builtin_popcountll(bits[i]);
++		std::vector<uint64_t> first_word, ones_before;
++		const uint64_t chunks = util::build_count_by_chunk<false>(bits, num_words, threads, first_word, ones_before);
++		const uint64_t c = ones_before[chunks];
+ 		num_ones = c;
+ 
+ 		assert(c <= num_bits);
+@@ -99,74 +102,22 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectHalf {
+ 
+ 		inventory.size(inventory_size * (longwords_per_subinventory + 1) + 1);
+ 
+-		uint64_t d = 0;
+-		const uint64_t mask = ones_per_inventory - 1;
+-
+ 		// First phase: we build an inventory for each one out of ones_per_inventory.
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (bits[i] & 1ULL << j) {
+-					if ((d & mask) == 0) inventory[(d >> log2_ones_per_inventory) * (longwords_per_subinventory + 1)] = i * 64 + j;
+-					d++;
+-				}
+-			}
+-
+-		assert(c == d);
++		util::build_first_level<false>(bits, num_bits, num_words, c, log2_ones_per_inventory, longwords_per_subinventory + 1, &inventory,
++									   first_word, ones_before, chunks, threads);
++
+ 		inventory[inventory_size * (longwords_per_subinventory + 1)] = num_bits;
+ 
+ #ifdef DEBUG
+ 		printf("Inventory entries filled: %" PRId64 "\n", inventory_size + 1);
+ #endif
+ 
+-		uint16_t *p16;
+-		int64_t *p64;
+-
+-		d = 0;
+-		uint64_t exact = 0, start, span, inventory_index;
+-		int offset;
+-
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (bits[i] & 1ULL << j) {
+-					if ((d & mask) == 0) {
+-						inventory_index = (d >> log2_ones_per_inventory) * (longwords_per_subinventory + 1);
+-						start = inventory[inventory_index];
+-						span = inventory[inventory_index + longwords_per_subinventory + 1] - start;
+-						if (span > (1 << 16)) inventory[inventory_index] = -inventory[inventory_index] - 1;
+-						offset = 0;
+-						p64 = &inventory[inventory_index + 1];
+-						p16 = (uint16_t *)p64;
+-					}
+-
+-					if (span < (1 << 16)) {
+-						assert(i * 64 + j - start <= (1 << 16));
+-						if ((d & ones_per_sub16_mask) == 0) {
+-							assert(offset < longwords_per_subinventory * 4);
+-							p16[offset++] = i * 64 + j - start;
+-						}
+-					} else {
+-						if ((d & ones_per_sub64_mask) == 0) {
+-							assert(offset < longwords_per_subinventory);
+-							p64[offset++] = i * 64 + j - start;
+-							exact++;
+-						}
+-					}
+-
+-					d++;
+-				}
+-			}
+-
+-#ifdef DEBUG
+-			// printf("Exact entries: %" PRId64 "\n", exact);
+-			// printf("First inventories: %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 "\n", inventory[0],
+-			// inventory[1], inventory[2],
+-			//       inventory[3]);
+-#endif
++		// Second phase: we build the subinventory of each inventory.
++		util::build_second_level<false>(bits, num_bits, c, inventory_size, log2_ones_per_inventory, log2_ones_per_sub16, log2_ones_per_sub64,
++										longwords_per_subinventory + 1, &inventory, threads);
+ 	}
+ 
+-	uint64_t select(const uint64_t rank) {
++	uint64_t select(const uint64_t rank) const {
+ #ifdef DEBUG
+ 		printf("Selecting %" PRId64 "\n...", rank);
+ #endif
+@@ -214,7 +165,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectHalf {
+ 		return word_index * 64 + select64(word, residual);
+ 	}
+ 
+-	uint64_t select(const uint64_t rank, uint64_t *const next) {
++	uint64_t select(const uint64_t rank, uint64_t *const next) const {
+ 		const uint64_t s = select(rank);
+ 		int curr = s / 64;
+ 
+@@ -229,6 +180,12 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectHalf {
+ 
+ 	/** Returns an estimate of the size (in bits) of this structure. */
+ 	size_t bitCount() const { return inventory.bitCount() - sizeof(inventory) * 8 + sizeof(*this) * 8; };
++
++	/** Calls f(pointer, size in bytes) for each allocated array of this structure. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		inventory.for_each_backing_array(f);
++	}
++
+ };
+ 
+ } // namespace sux::bits
+diff --git a/sux/bits/SimpleSelectZero.hpp b/sux/bits/SimpleSelectZero.hpp
+index a9d9ba0..a2d693f 100644
+--- a/sux/bits/SimpleSelectZero.hpp
++++ b/sux/bits/SimpleSelectZero.hpp
+@@ -29,6 +29,7 @@
+ #pragma once
+ 
+ #include "../support/common.hpp"
++#include "../util/ParallelBuild.hpp"
+ #include "../util/Vector.hpp"
+ #include "SelectZero.hpp"
+ #include <cstdint>
+@@ -62,7 +63,11 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ 	uint64_t num_words, inventory_size, exact_spill_size, num_zeros;
+ 
+   public:
+-	SimpleSelectZero() {}
++    SimpleSelectZero() = default;
++    SimpleSelectZero(SimpleSelectZero&& other) = default;
++    SimpleSelectZero(const SimpleSelectZero& other) = default;
++    SimpleSelectZero& operator=(SimpleSelectZero&& other) = default;
++    SimpleSelectZero& operator=(const SimpleSelectZero& other) = default;
+ 
+ 	/** Creates a new instance using a given bit vector.
+ 	 *
+@@ -70,13 +75,17 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ 	 * @param num_bits the length (in bits) of the bit vector.
+ 	 * @param max_log2_longwords_per_subinventory the number of words per subinventory:
+ 	 * a larger value yields a faster map that uses more space; typical values are between 0 and 3.
++	 * @param threads the number of threads to use.
+ 	 */
+-	SimpleSelectZero(const uint64_t *const bits, const uint64_t num_bits, const int max_log2_longwords_per_subinventory) : bits(bits) {
++	SimpleSelectZero(const uint64_t *const bits, const uint64_t num_bits, const int max_log2_longwords_per_subinventory,
++					 const uint64_t threads = 1)
++		: bits(bits) {
+ 		num_words = (num_bits + 63) / 64;
+ 
+ 		// Init rank/select structure
+-		uint64_t c = 0;
+-		for (uint64_t i = 0; i < num_words; i++) c += __builtin_popcountll(~bits[i]);
++		std::vector<uint64_t> first_word, zeros_before;
++		const uint64_t chunks = util::build_count_by_chunk<true>(bits, num_words, threads, first_word, zeros_before);
++		uint64_t c = zeros_before[chunks];
+ 		num_zeros = c;
+ 
+ 		if (num_bits % 64 != 0) c -= 64 - num_bits % 64;
+@@ -105,21 +114,11 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ #endif
+ 
+ 		inventory.size(inventory_size * longwords_per_inventory + 1);
+-		const int64_t *end_of_inventory = &inventory + inventory_size * longwords_per_inventory + 1;
+-
+-		uint64_t d = 0;
+ 
+ 		// First phase: we build an inventory for each one out of zeros_per_inventory.
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (~bits[i] & 1ULL << j) {
+-					if ((d & zeros_per_inventory_mask) == 0) inventory[(d >> log2_zeros_per_inventory) * longwords_per_inventory] = i * 64 + j;
+-					d++;
+-				}
+-			}
++		util::build_first_level<true>(bits, num_bits, num_words, c, log2_zeros_per_inventory, longwords_per_inventory, &inventory, first_word,
++									  zeros_before, chunks, threads);
+ 
+-		assert(c == d);
+ 		inventory[inventory_size * longwords_per_inventory] = num_bits;
+ 
+ #ifdef DEBUG
+@@ -129,84 +128,66 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ 		// If zeros_per_inventory = 1 we don't need to build subinventories;
+ 		// this case is managed in the selection code by a test.
+ 		if (zeros_per_inventory > 1) {
+-			d = 0;
+-			int zeros;
+-			uint64_t spilled = 0, exact = 0, start, span, inventory_index;
+-
+-			for (uint64_t i = 0; i < num_words; i++)
+-				// We estimate the subinventory and exact spill size
+-				for (int j = 0; j < 64; j++) {
+-					if (i * 64 + j >= num_bits) break;
+-					if (~bits[i] & 1ULL << j) {
+-						if ((d & zeros_per_inventory_mask) == 0) {
+-							inventory_index = d >> log2_zeros_per_inventory;
+-							start = inventory[inventory_index * longwords_per_inventory];
+-							span = inventory[(inventory_index + 1) * longwords_per_inventory] - start;
+-							zeros = min(c - d, (uint64_t)zeros_per_inventory);
+-
+-							assert(start + span == num_bits || zeros == zeros_per_inventory);
+-
+-							// We accumulate space for exact pointers ONLY if necessary.
+-							if (span >= (1 << 16)) {
+-								exact += zeros;
+-								if (zeros_per_sub64 > 1) spilled += zeros;
+-							}
+-						}
+-						d++;
+-					}
+-				}
++			// start[k] and span[k], the position of the first zero and the span of inventory k; spill_base[k],
++			// the number of entries in exact_spill before inventory k. The spans are read from the first
++			// level before the loop below sets the top bit of its entries.
++			std::vector<uint64_t> start(inventory_size), span(inventory_size), spill_base(inventory_size + 1, 0);
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++			for (uint64_t k = 0; k < inventory_size; k++) {
++				start[k] = uint64_t(inventory[k * longwords_per_inventory]);
++				span[k] = uint64_t(inventory[(k + 1) * longwords_per_inventory]) - start[k];
++				const uint64_t zeros = min(c - k * (uint64_t)zeros_per_inventory, (uint64_t)zeros_per_inventory);
++
++				assert(start[k] + span[k] == num_bits || zeros == (uint64_t)zeros_per_inventory);
++
++				// We accumulate space for exact pointers ONLY if necessary.
++				spill_base[k + 1] = (span[k] >= (1 << 16) && zeros_per_sub64 > 1) ? zeros : 0;
++			}
++
++			for (uint64_t k = 0; k < inventory_size; k++) spill_base[k + 1] += spill_base[k];
+ 
+ #ifdef DEBUG
+-			printf("Spilled entries: %" PRId64 " exact: %" PRId64 "\n", spilled, exact);
++			printf("Spilled entries: %" PRId64 "\n", spill_base[inventory_size]);
+ #endif
+ 
+-			exact_spill_size = spilled;
++			exact_spill_size = spill_base[inventory_size];
+ 			exact_spill.size(exact_spill_size);
+ 
+-			uint16_t *p16;
+-			int64_t *p64;
+-			int offset;
+-			spilled = 0;
+-			d = 0;
+-
+-			for (uint64_t i = 0; i < num_words; i++)
+-				for (int j = 0; j < 64; j++) {
+-					if (i * 64 + j >= num_bits) break;
+-					if (~bits[i] & 1ULL << j) {
+-						if ((d & zeros_per_inventory_mask) == 0) {
+-							inventory_index = d >> log2_zeros_per_inventory;
+-							start = inventory[inventory_index * longwords_per_inventory];
+-							span = inventory[(inventory_index + 1) * longwords_per_inventory] - start;
+-							p64 = &inventory[inventory_index * longwords_per_inventory + 1];
+-							p16 = (uint16_t *)p64;
+-							offset = 0;
++#pragma omp parallel for num_threads(threads) schedule(static)
++			for (uint64_t k = 0; k < inventory_size; k++) {
++				int64_t *const p64 = &inventory[k * longwords_per_inventory + 1];
++				uint16_t *const p16 = (uint16_t *)p64;
++				const uint64_t d_beg = k * (uint64_t)zeros_per_inventory;
++				const uint64_t d_end = c < d_beg + zeros_per_inventory ? c : d_beg + zeros_per_inventory;
++				uint64_t spilled = spill_base[k];
++				uint64_t offset = 0;
++
++				uint64_t i = start[k] / 64;
++				uint64_t word = util::build_masked_word<true>(bits, i, num_bits) & (~UINT64_C(0) << (start[k] % 64));
++
++				for (uint64_t d = d_beg; d < d_end; d++) {
++					if (word == 0) word = util::build_next_word<true>(bits, i, num_bits);
++					if (word == 0) break;
++
++					const uint64_t at = i * 64 + __builtin_ctzll(word);
++
++					if (span[k] < (1 << 16)) {
++						if ((d & zeros_per_sub16_mask) == 0) p16[offset++] = at - start[k];
++					} else if (zeros_per_sub64 == 1) {
++						p64[offset++] = at;
++					} else {
++						if (d == d_beg) {
++							inventory[k * longwords_per_inventory] |= 1ULL << 63;
++							p64[0] = spill_base[k];
+ 						}
+ 
+-						if (span < (1 << 16)) {
+-							assert(i * 64 + j - start <= (1 << 16));
+-							if ((d & zeros_per_sub16_mask) == 0) {
+-								assert(offset < longwords_per_subinventory * 4);
+-								assert(p16 + offset < (uint16_t *)end_of_inventory);
+-								p16[offset++] = i * 64 + j - start;
+-							}
+-						} else {
+-							if (zeros_per_sub64 == 1) {
+-								assert(p64 + offset < end_of_inventory);
+-								p64[offset++] = i * 64 + j;
+-							} else {
+-								assert(p64 < end_of_inventory);
+-								if ((d & zeros_per_inventory_mask) == 0) {
+-									inventory[inventory_index * longwords_per_inventory] |= 1ULL << 63;
+-									p64[0] = spilled;
+-								}
+-								assert(spilled < exact_spill_size);
+-								exact_spill[spilled++] = i * 64 + j;
+-							}
+-						}
+-
+-						d++;
++						exact_spill[spilled++] = at;
+ 					}
++
++					word &= word - 1;
+ 				}
++			}
+ 		}
+ 
+ #ifdef DEBUG
+@@ -218,7 +199,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ #endif
+ 	}
+ 
+-	uint64_t selectZero(const uint64_t rank) {
++	uint64_t selectZero(const uint64_t rank) const {
+ #ifdef DEBUG
+ 		printf("Selecting %" PRId64 "\n...", rank);
+ #endif
+@@ -272,6 +253,63 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZero {
+ 
+ 	/** Returns an estimate of the size (in bits) of this structure. */
+ 	size_t bitCount() const { return inventory.bitCount() - sizeof(inventory) * 8 + exact_spill.bitCount() - sizeof(exact_spill) * 8 + sizeof(*this) * 8; }
++
++	/** Calls f(pointer, size in bytes) for each allocated array of this structure. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		inventory.for_each_backing_array(f);
++		exact_spill.for_each_backing_array(f);
++	}
++
++
++	void set_vector(const uint64_t *bits) {
++		this->bits = bits;
++	}
++
++	void serialize(std::ostream& out) const {
++        out << inventory;
++        out << exact_spill;
++		out.write((char*)&log2_zeros_per_inventory,sizeof(int));
++		out.write((char*)&log2_zeros_per_sub16,sizeof(int));
++		out.write((char*)&log2_zeros_per_sub64,sizeof(int));
++		out.write((char*)&log2_longwords_per_subinventory,sizeof(int));
++		out.write((char*)&zeros_per_inventory,sizeof(int));
++		out.write((char*)&zeros_per_sub16,sizeof(int));
++		out.write((char*)&zeros_per_sub64,sizeof(int));
++		out.write((char*)&longwords_per_subinventory,sizeof(int));
++		out.write((char*)&longwords_per_inventory,sizeof(int));
++		out.write((char*)&zeros_per_inventory_mask,sizeof(int));
++		out.write((char*)&zeros_per_sub16_mask,sizeof(int));
++		out.write((char*)&zeros_per_sub64_mask,sizeof(int));
++		out.write((char*)&num_words,sizeof(uint64_t));
++		out.write((char*)&inventory_size,sizeof(uint64_t));
++		out.write((char*)&exact_spill_size,sizeof(uint64_t));
++		out.write((char*)&num_zeros,sizeof(uint64_t));
++    }
++	
++    void load(std::istream& in) {
++        in >> inventory;
++        in >> exact_spill;
++		in.read((char*)&log2_zeros_per_inventory,sizeof(int));
++		in.read((char*)&log2_zeros_per_sub16,sizeof(int));
++		in.read((char*)&log2_zeros_per_sub64,sizeof(int));
++		in.read((char*)&log2_longwords_per_subinventory,sizeof(int));
++		in.read((char*)&zeros_per_inventory,sizeof(int));
++		in.read((char*)&zeros_per_sub16,sizeof(int));
++		in.read((char*)&zeros_per_sub64,sizeof(int));
++		in.read((char*)&longwords_per_subinventory,sizeof(int));
++		in.read((char*)&longwords_per_inventory,sizeof(int));
++		in.read((char*)&zeros_per_inventory_mask,sizeof(int));
++		in.read((char*)&zeros_per_sub16_mask,sizeof(int));
++		in.read((char*)&zeros_per_sub64_mask,sizeof(int));
++		in.read((char*)&num_words,sizeof(uint64_t));
++		in.read((char*)&inventory_size,sizeof(uint64_t));
++		in.read((char*)&exact_spill_size,sizeof(uint64_t));
++		in.read((char*)&num_zeros,sizeof(uint64_t));
++    }
++
++	uint64_t size_in_bytes() const {
++		return sizeof(this)+inventory.size_in_bytes()+exact_spill.size_in_bytes();
++	}
+ };
+ 
+ } // namespace sux::bits
+diff --git a/sux/bits/SimpleSelectZeroHalf.hpp b/sux/bits/SimpleSelectZeroHalf.hpp
+index 5cae7ad..0e220d6 100644
+--- a/sux/bits/SimpleSelectZeroHalf.hpp
++++ b/sux/bits/SimpleSelectZeroHalf.hpp
+@@ -29,6 +29,7 @@
+ #pragma once
+ 
+ #include "../support/common.hpp"
++#include "../util/ParallelBuild.hpp"
+ #include "../util/Vector.hpp"
+ #include "SelectZero.hpp"
+ #include <cstdint>
+@@ -77,14 +78,16 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
+ 	 *
+ 	 * @param bits a bit vector of 64-bit words.
+ 	 * @param num_bits the length (in bits) of the bit vector.
++	 * @param threads the number of threads to use.
+ 	 */
+ 
+-	SimpleSelectZeroHalf(const uint64_t *const bits, const uint64_t num_bits) : bits(bits) {
++	SimpleSelectZeroHalf(const uint64_t *const bits, const uint64_t num_bits, const uint64_t threads = 1) : bits(bits) {
+ 		num_words = (num_bits + 63) / 64;
+ 
+ 		// Init rank/select structure
+-		uint64_t c = 0;
+-		for (uint64_t i = 0; i < num_words; i++) c += __builtin_popcountll(~bits[i]);
++		std::vector<uint64_t> first_word, zeros_before;
++		const uint64_t chunks = util::build_count_by_chunk<true>(bits, num_words, threads, first_word, zeros_before);
++		uint64_t c = zeros_before[chunks];
+ 		num_zeros = c;
+ 
+ 		if (num_bits % 64 != 0) c -= 64 - num_bits % 64;
+@@ -100,73 +103,22 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
+ 
+ 		inventory.size(inventory_size * (longwords_per_subinventory + 1) + 1);
+ 
+-		uint64_t d = 0;
+-		const uint64_t mask = zeros_per_inventory - 1;
+-
+ 		// First phase: we build an inventory for each one out of zeros_per_inventory.
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (~bits[i] & 1ULL << j) {
+-					if ((d & mask) == 0) inventory[(d >> log2_zeros_per_inventory) * (longwords_per_subinventory + 1)] = i * 64 + j;
+-					d++;
+-				}
+-			}
+-
+-		assert(c == d);
++		util::build_first_level<true>(bits, num_bits, num_words, c, log2_zeros_per_inventory, longwords_per_subinventory + 1, &inventory,
++									  first_word, zeros_before, chunks, threads);
++
+ 		inventory[inventory_size * (longwords_per_subinventory + 1)] = num_bits;
+ 
+ #ifdef DEBUG
+ 		printf("Inventory entries filled: %" PRId64 "\n", inventory_size + 1);
+ #endif
+ 
+-		uint16_t *p16;
+-		int64_t *p64;
+-
+-		d = 0;
+-		uint64_t exact = 0, start, span, inventory_index;
+-		int offset;
+-
+-		for (uint64_t i = 0; i < num_words; i++)
+-			for (int j = 0; j < 64; j++) {
+-				if (i * 64 + j >= num_bits) break;
+-				if (~bits[i] & 1ULL << j) {
+-					if ((d & mask) == 0) {
+-						inventory_index = (d >> log2_zeros_per_inventory) * (longwords_per_subinventory + 1);
+-						start = inventory[inventory_index];
+-						span = inventory[inventory_index + longwords_per_subinventory + 1] - start;
+-						if (span > (1 << 16)) inventory[inventory_index] = -inventory[inventory_index] - 1;
+-						offset = 0;
+-						p64 = &inventory[inventory_index + 1];
+-						p16 = (uint16_t *)p64;
+-					}
+-
+-					if (span < (1 << 16)) {
+-						assert(i * 64 + j - start <= (1 << 16));
+-						if ((d & zeros_per_sub16_mask) == 0) {
+-							assert(offset < longwords_per_subinventory * 4);
+-							p16[offset++] = i * 64 + j - start;
+-						}
+-					} else {
+-						if ((d & zeros_per_sub64_mask) == 0) {
+-							assert(offset < longwords_per_subinventory);
+-							p64[offset++] = i * 64 + j - start;
+-							exact++;
+-						}
+-					}
+-
+-					d++;
+-				}
+-			}
+-
+-#ifdef DEBUG
+-			// printf("Exact entries: %" PRId64 "\n", exact);
+-			// printf("First inventories: %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 "\n", inventory[0], inventory[1], inventory[2],
+-			//       inventory[3]);
+-#endif
++		// Second phase: we build the subinventory of each inventory.
++		util::build_second_level<true>(bits, num_bits, c, inventory_size, log2_zeros_per_inventory, log2_zeros_per_sub16, log2_zeros_per_sub64,
++									   longwords_per_subinventory + 1, &inventory, threads);
+ 	}
+ 
+-	uint64_t selectZero(const uint64_t rank) {
++	uint64_t selectZero(const uint64_t rank) const {
+ #ifdef DEBUG
+ 		printf("Selecting %" PRId64 "\n...", rank);
+ #endif
+@@ -214,7 +166,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
+ 		return word_index * 64 + select64(word, residual);
+ 	}
+ 
+-	uint64_t selectZero(const uint64_t rank, uint64_t *const next) {
++	uint64_t selectZero(const uint64_t rank, uint64_t *const next) const {
+ 		const uint64_t s = selectZero(rank);
+ 		int curr = s / 64;
+ 
+@@ -229,6 +181,12 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
+ 
+ 	/** Returns an estimate of the size (in bits) of this structure. */
+ 	size_t bitCount() const { return inventory.bitCount() - sizeof(inventory) * 8 + sizeof(*this) * 8; };
++
++	/** Calls f(pointer, size in bytes) for each allocated array of this structure. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		inventory.for_each_backing_array(f);
++	}
++
+ };
+ 
+ } // namespace sux::bits
+diff --git a/sux/support/common.hpp b/sux/support/common.hpp
+index 81b0b43..cb3b3e0 100644
+--- a/sux/support/common.hpp
++++ b/sux/support/common.hpp
+@@ -374,8 +374,13 @@ inline size_t updroot(size_t j, size_t n) { return n & (SIZE_MAX << lambda((j ^
+  * Long.trailingZeros(geqKStep8) has been replaced with nu(geqKStep8)
+  * following a suggestion by Giuseppe Ottaviano.
+  */
++// select64 uses pdep only on targets on which pdep is not implemented in microcode
++#if defined(__BMI2__) && !defined(__znver1__) && !defined(__znver2__) && !defined(__bdver4__)
++#define SUX_SELECT64_PDEP 1
++#endif
++
+ inline uint64_t select64(uint64_t x, uint64_t k) {
+-#ifndef __BMI2__
++#ifndef SUX_SELECT64_PDEP
+ 	constexpr uint64_t kOnesStep4 = 0x1111111111111111ULL;
+ 	constexpr uint64_t kOnesStep8 = 0x0101010101010101ULL;
+ 	constexpr uint64_t kLAMBDAsStep8 = 0x80ULL * kOnesStep8;
+diff --git a/sux/util/ParallelBuild.hpp b/sux/util/ParallelBuild.hpp
+new file mode 100644
+index 0000000..25174d9
+--- /dev/null
++++ b/sux/util/ParallelBuild.hpp
+@@ -0,0 +1,154 @@
++/*
++ * Sux: Succinct data structures
++ *
++ * Parallel construction of the two-level inventories of the select structures in sux/bits. If complement
++ * is true, the inventories are built for the zeros of the bit vector (each word is complemented).
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <vector>
++
++#ifdef _OPENMP
++#include <omp.h>
++#endif
++
++namespace sux::util {
++
++/** Returns the i-th word of the bit vector (complemented, if complement is true). */
++template <bool complement> static inline uint64_t build_word(const uint64_t *const bits, const uint64_t i) {
++	return complement ? ~bits[i] : bits[i];
++}
++
++/** Returns the i-th word of the bit vector (see build_word) with the bits at the positions >= num_bits
++ *  cleared; returns 0 without reading the word, if it starts at a position >= num_bits. */
++template <bool complement> static inline uint64_t build_masked_word(const uint64_t *const bits, const uint64_t i, const uint64_t num_bits) {
++	const uint64_t base = i * 64;
++	if (base >= num_bits) return 0;
++	const uint64_t word = build_word<complement>(bits, i);
++	if (base + 64 <= num_bits) return word;
++	return word & ((UINT64_C(1) << (num_bits - base)) - 1);
++}
++
++/** Advances i to the next word that contains a one and returns that word (see build_masked_word);
++ *  returns 0, if there is no such word. */
++template <bool complement> static inline uint64_t build_next_word(const uint64_t *const bits, uint64_t &i, const uint64_t num_bits) {
++	uint64_t word = 0;
++	while (word == 0 && (++i) * 64 < num_bits) word = build_masked_word<complement>(bits, i, num_bits);
++	return word;
++}
++
++/** Splits the bit vector into chunks of words and counts the ones before each chunk.
++ *
++ * @param bits a bit vector of 64-bit words.
++ * @param num_words the length (in 64-bit words) of the bit vector.
++ * @param threads the number of threads to use.
++ * @param first_word output: chunk t consists of the words [first_word[t], first_word[t + 1]).
++ * @param ones_before output: ones_before[t] is the number of ones in the words before chunk t;
++ * ones_before[chunks] is the number of ones in all words (including the bits of the last word at the
++ * positions >= num_bits).
++ * @return the number of chunks.
++ */
++template <bool complement>
++static inline uint64_t build_count_by_chunk(const uint64_t *const bits, const uint64_t num_words, const uint64_t threads,
++										   std::vector<uint64_t> &first_word, std::vector<uint64_t> &ones_before) {
++	const uint64_t chunks = threads <= 1 ? 1 : threads * 4;
++
++	first_word.resize(chunks + 1);
++	ones_before.resize(chunks + 1);
++	for (uint64_t t = 0; t <= chunks; t++) first_word[t] = (t * num_words) / chunks;
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++	for (uint64_t t = 0; t < chunks; t++) {
++		uint64_t count = 0;
++		for (uint64_t i = first_word[t]; i < first_word[t + 1]; i++) count += __builtin_popcountll(build_word<complement>(bits, i));
++		ones_before[t + 1] = count;
++	}
++
++	ones_before[0] = 0;
++	for (uint64_t t = 0; t < chunks; t++) ones_before[t + 1] += ones_before[t];
++	return chunks;
++}
++
++/** Writes the position of every 2^log2_per_inventory-th one into the first level of the inventory.
++ *
++ * @param count the number of ones at the positions < num_bits.
++ * @param log2_per_inventory the base-2 logarithm of the number of ones per inventory.
++ * @param longwords_per_inventory the number of 64-bit words per inventory (first-level entry and subinventory).
++ * @param first_word, ones_before, chunks the chunks (see build_count_by_chunk).
++ */
++template <bool complement>
++static inline void build_first_level(const uint64_t *const bits, const uint64_t num_bits, const uint64_t num_words, const uint64_t count,
++									 const int log2_per_inventory, const int longwords_per_inventory, int64_t *const inventory,
++									 const std::vector<uint64_t> &first_word, const std::vector<uint64_t> &ones_before, const uint64_t chunks,
++									 const uint64_t threads) {
++	const uint64_t mask = (UINT64_C(1) << log2_per_inventory) - 1;
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++	for (uint64_t t = 0; t < chunks; t++) {
++		uint64_t d = ones_before[t];
++
++		for (uint64_t i = first_word[t]; i < first_word[t + 1] && d < count; i++) {
++			uint64_t word = build_masked_word<complement>(bits, i, num_bits);
++
++			while (word != 0 && d < count) {
++				if ((d & mask) == 0) inventory[(d >> log2_per_inventory) * longwords_per_inventory] = i * 64 + __builtin_ctzll(word);
++				d++;
++				word &= word - 1;
++			}
++		}
++	}
++}
++
++/** Writes the subinventory of each inventory (used by SimpleSelectHalf and SimpleSelectZeroHalf): the
++ *  offsets of every 2^log2_per_sub16-th one (16-bit entries) or of every 2^log2_per_sub64-th one (64-bit
++ *  entries) from the first one of the inventory. The first-level entry of each inventory with a span
++ *  larger than 2^16 is negated. The parameters are those of build_first_level.
++ */
++template <bool complement>
++static inline void build_second_level(const uint64_t *const bits, const uint64_t num_bits, const uint64_t count, const uint64_t inventory_size,
++									  const int log2_per_inventory, const int log2_per_sub16, const int log2_per_sub64,
++									  const int longwords_per_inventory, int64_t *const inventory, const uint64_t threads) {
++	const uint64_t per_inventory = UINT64_C(1) << log2_per_inventory;
++	// negate[k] = 1 <=> the first-level entry of inventory k has to be negated; the entries are negated
++	// after all spans have been computed (the span of inventory k is computed from the entry of inventory k + 1)
++	std::vector<char> negate(inventory_size, 0);
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++	for (uint64_t k = 0; k < inventory_size; k++) {
++		const uint64_t start = uint64_t(inventory[k * longwords_per_inventory]);
++		const uint64_t span = uint64_t(inventory[(k + 1) * longwords_per_inventory]) - start;
++		if (span > (1 << 16)) negate[k] = 1;
++
++		int64_t *const p64 = &inventory[k * longwords_per_inventory + 1];
++		uint16_t *const p16 = (uint16_t *)p64;
++		const uint64_t d_beg = k * per_inventory;
++		const uint64_t d_end = count < d_beg + per_inventory ? count : d_beg + per_inventory;
++
++		uint64_t i = start / 64;
++		uint64_t word = build_masked_word<complement>(bits, i, num_bits) & (~UINT64_C(0) << (start % 64));
++
++		for (uint64_t d = d_beg; d < d_end; d++) {
++			if (word == 0) word = build_next_word<complement>(bits, i, num_bits);
++			if (word == 0) break;
++
++			const uint64_t at = i * 64 + __builtin_ctzll(word);
++
++			if (span < (1 << 16)) {
++				if ((d & ((UINT64_C(1) << log2_per_sub16) - 1)) == 0) p16[(d - d_beg) >> log2_per_sub16] = at - start;
++			} else {
++				if ((d & ((UINT64_C(1) << log2_per_sub64) - 1)) == 0) p64[(d - d_beg) >> log2_per_sub64] = at - start;
++			}
++
++			word &= word - 1;
++		}
++	}
++
++#pragma omp parallel for num_threads(threads) schedule(static)
++	for (uint64_t k = 0; k < inventory_size; k++) {
++		if (negate[k]) inventory[k * longwords_per_inventory] = -inventory[k * longwords_per_inventory] - 1;
++	}
++}
++
++} // namespace sux::util
+diff --git a/sux/util/Vector.hpp b/sux/util/Vector.hpp
+index 3ea2432..783f2d8 100644
+--- a/sux/util/Vector.hpp
++++ b/sux/util/Vector.hpp
+@@ -97,7 +97,7 @@ template <typename T, AllocType AT = MALLOC> class Vector : public Expandable {
+ 
+ 	explicit Vector(size_t length) { size(length); }
+ 
+-	explicit Vector(const T *data, size_t length) : Vector(length) { memcpy(this->data, data, length); }
++	explicit Vector(const T *data, size_t length) : Vector(length) { memcpy(this->data, data, length * sizeof(T)); }
+ 
+ 	~Vector() {
+ 		if (data) {
+@@ -109,10 +109,14 @@ template <typename T, AllocType AT = MALLOC> class Vector : public Expandable {
+ 			}
+ 		}
+ 	}
++	
++    void copy_from_other(const Vector& other) {
++        *this = Vector(other.data,other._size);
++    }
+ 
+-	// Delete copy operators
+-	Vector(const Vector &) = delete;
+-	Vector &operator=(const Vector &) = delete;
++	// Define copy operators
++	Vector(const Vector &other) {copy_from_other(other);}
++	Vector &operator=(const Vector &other) {copy_from_other(other);return *this;}
+ 
+ 	// Define move operators
+ 	Vector(Vector<T, AT> &&oth) : _size(std::exchange(oth._size, 0)), _capacity(std::exchange(oth._capacity, 0)), data(std::exchange(oth.data, nullptr)) {}
+@@ -122,6 +126,15 @@ template <typename T, AllocType AT = MALLOC> class Vector : public Expandable {
+ 		return *this;
+ 	}
+ 
++	uint64_t size_in_bytes() const {
++		return sizeof(this)+_capacity*sizeof(T);
++	}
++
++	/** Calls f(pointer, size in bytes) for the backing array, if it is allocated. */
++	template <typename fnc_t> void for_each_backing_array(fnc_t f) const {
++		if (data != nullptr) f(static_cast<void *>(data), _capacity * sizeof(T));
++	}
++
+ 	/** Trim the the memory allocated so that it holds at most the given number of elements.
+ 	 * @param capacity the new desired capacity.
+ 	 */
+@@ -232,11 +245,13 @@ template <typename T, AllocType AT = MALLOC> class Vector : public Expandable {
+ 	size_t bitCount() const { return sizeof(*this) * 8 + _capacity * sizeof(T) * 8; }
+ 
+   private:
+-	static size_t page_aligned(size_t size) {
++	/** Rounds a number of bytes up to a multiple of the page size. */
++	static size_t page_aligned(size_t bytes) {
++		if (bytes == 0) return 0;
+ 		if (AT == FORCEHUGEPAGE)
+-			return ((2 * 1024 * 1024 - 1) | (size * sizeof(T) - 1)) + 1;
++			return ((2 * 1024 * 1024 - 1) | (bytes - 1)) + 1;
+ 		else
+-			return ((4 * 1024 - 1) | (size * sizeof(T) - 1)) + 1;
++			return ((4 * 1024 - 1) | (bytes - 1)) + 1;
+ 	}
+ 
+ 	void remap(size_t size) {
