@@ -1,0 +1,125 @@
+diff --git a/include/ips2ra/base_case.hpp b/include/ips2ra/base_case.hpp
+index 1687a99..3b0ee92 100644
+--- a/include/ips2ra/base_case.hpp
++++ b/include/ips2ra/base_case.hpp
+@@ -70,7 +70,8 @@ void insertionSort(const It begin, const It end, Comp comp) {
+ template <std::ptrdiff_t threshold, class It, class Comp>
+ bool insertionsortIfAtMostThreshold(It begin, It end, Comp&& comp) {
+     const bool is_small = end - begin <= threshold;
+-    if (is_small) {
++    // insertionSort must not be called with an empty range
++    if (is_small && begin < end) {
+         insertionSort(std::move(begin), std::move(end), std::forward<Comp>(comp));
+     }
+     return is_small;
+diff --git a/include/ips2ra/local_classification.hpp b/include/ips2ra/local_classification.hpp
+index 7bef71d..c4f6e67 100644
+--- a/include/ips2ra/local_classification.hpp
++++ b/include/ips2ra/local_classification.hpp
+@@ -53,7 +53,7 @@ typename Cfg::difference_type Sorter<Cfg>::classifyLocally(const iterator my_beg
+     auto& buffers = local_.buffers;
+ 
+     // Do the classification
+-    classifier_->template classify(my_begin, my_end, level_,
++    classifier_->classify(my_begin, my_end, level_,
+                                    [&](typename Cfg::bucket_type bucket, iterator it) {
+                                        // Only flush buffers on overflow
+                                        if (buffers.isFull(bucket)) {
+diff --git a/include/ips2ra/memory.hpp b/include/ips2ra/memory.hpp
+index ddb8e79..9ef5854 100644
+--- a/include/ips2ra/memory.hpp
++++ b/include/ips2ra/memory.hpp
+@@ -45,7 +45,9 @@
+ #include <utility>
+ #include <vector>
+ 
++#ifndef IPS2RA_NO_TBB
+ #include <tbb/concurrent_queue.h>
++#endif
+ 
+ #include "ips2ra_fwd.hpp"
+ #include "bucket_pointers.hpp"
+diff --git a/include/ips2ra/parallel.hpp b/include/ips2ra/parallel.hpp
+index 5aaa32b..b97f7fe 100644
+--- a/include/ips2ra/parallel.hpp
++++ b/include/ips2ra/parallel.hpp
+@@ -49,7 +49,9 @@
+ #include <utility>
+ #include <vector>
+ 
++#ifndef IPS2RA_NO_TBB
+ #include <tbb/concurrent_queue.h>
++#endif
+ 
+ #include "ips2ra_fwd.hpp"
+ #include "config.hpp"
+diff --git a/include/ips2ra/scheduler.hpp b/include/ips2ra/scheduler.hpp
+index e12b5a3..26db6a4 100644
+--- a/include/ips2ra/scheduler.hpp
++++ b/include/ips2ra/scheduler.hpp
+@@ -42,7 +42,12 @@
+ #include <numeric>
+ #include <vector>
+ 
++#ifdef IPS2RA_NO_TBB
++#include <deque>
++#include <mutex>
++#else
+ #include <tbb/concurrent_queue.h>
++#endif
+ 
+ namespace ips2ra {
+ namespace detail {
+@@ -107,6 +112,40 @@ class PrivateQueue {
+     size_t m_off;
+ };
+ 
++#ifdef IPS2RA_NO_TBB
++/**
++ * A FIFO queue of jobs shared by all threads, without TBB: a deque under a mutex.
++ * empty() reads the size from an atomic, so the idle threads that poll it
++ * (Scheduler::getJob) do not take the lock.
++ */
++template <class Job>
++class GlobalQueue {
++ public:
++    void push(const Job& j) {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_jobs.push_back(j);
++        m_size.store(m_jobs.size(), std::memory_order_relaxed);
++    }
++
++    bool try_pop(Job& j) {
++        if (empty()) return false;
++        std::lock_guard<std::mutex> lock(m_mutex);
++        if (m_jobs.empty()) return false;
++        j = m_jobs.front();
++        m_jobs.pop_front();
++        m_size.store(m_jobs.size(), std::memory_order_relaxed);
++        return true;
++    }
++
++    bool empty() const { return m_size.load(std::memory_order_relaxed) == 0; }
++
++ private:
++    std::mutex m_mutex;
++    std::deque<Job> m_jobs;
++    std::atomic<size_t> m_size{0};
++};
++#endif
++
+ template <class Job>
+ class Scheduler {
+  public:
+@@ -154,7 +193,11 @@ class Scheduler {
+     void reset() { m_num_idle_threads.store(0, std::memory_order_relaxed); }
+ 
+  protected:
++#ifdef IPS2RA_NO_TBB
++    GlobalQueue<Job> m_glob_queue;
++#else
+     tbb::concurrent_queue<Job> m_glob_queue;
++#endif
+     std::atomic_uint64_t m_num_idle_threads;
+     const size_t m_num_threads;
+ };

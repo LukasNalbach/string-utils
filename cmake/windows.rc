@@ -1,0 +1,4 @@
+// embeds windows.manifest as the application manifest of an executable built with MinGW (see
+// string_utils_add_executable in string_utils.cmake): the resource 1 (CREATEPROCESS_MANIFEST_RESOURCE_ID) of the type
+// 24 (RT_MANIFEST)
+1 24 "windows.manifest"

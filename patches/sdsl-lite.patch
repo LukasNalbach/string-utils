@@ -1,0 +1,54 @@
+diff --git a/include/sdsl/int_vector_buffer.hpp b/include/sdsl/int_vector_buffer.hpp
+index 6017015..8fd9ada 100644
+--- a/include/sdsl/int_vector_buffer.hpp
++++ b/include/sdsl/int_vector_buffer.hpp
+@@ -146,8 +146,8 @@ class int_vector_buffer
+             mode &= ~std::ios::app;
+             m_buffer.width(int_width);
+             if (is_plain) {
+-                // is_plain is only allowed with width() in {8, 16, 32, 64}
+-                assert(8==width() or 16==width() or 32==width() or 64==width());
++                // is_plain is only allowed with a byte-aligned width() in [8, 64]
++                assert(width()>=8 and width()<=64 and width()%8==0);
+             } else {
+                 m_offset = t_width ? 8 : 9;
+             }
+diff --git a/include/sdsl/louds_tree.hpp b/include/sdsl/louds_tree.hpp
+index 6d6d6e9..2149e34 100644
+--- a/include/sdsl/louds_tree.hpp
++++ b/include/sdsl/louds_tree.hpp
+@@ -179,8 +179,8 @@ class louds_tree
+ 
+         void swap(louds_tree& tree) {
+             m_bv.swap(tree.m_bv);
+-            util::swap_support(m_bv_select1, tree.m_select1, &m_bv, &(tree.m_bv));
+-            util::swap_support(m_bv_select0, tree.m_select0, &m_bv, &(tree.m_bv));
++            util::swap_support(m_bv_select1, tree.m_bv_select1, &m_bv, &(tree.m_bv));
++            util::swap_support(m_bv_select0, tree.m_bv_select0, &m_bv, &(tree.m_bv));
+         }
+ 
+         size_type serialize(std::ostream& out, structure_tree_node* v=nullptr, std::string name="")const {
+diff --git a/include/sdsl/memory_management.hpp b/include/sdsl/memory_management.hpp
+index 75f83d2..a7af02a 100644
+--- a/include/sdsl/memory_management.hpp
++++ b/include/sdsl/memory_management.hpp
+@@ -23,9 +23,18 @@
+ 
+ #ifdef MSVC_COMPILER
+ // windows.h has min/max macro which causes problems when using std::min/max
+-#define NOMINMAX 
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++// without the RPC headers, which define small as a macro
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
+ #include <windows.h>
+ #include <io.h>
++// near and far are empty macros (of 16-bit Windows) that would replace these names in the code including sdsl
++#undef near
++#undef far
+ #else
+ #include <sys/mman.h>
+ #endif
