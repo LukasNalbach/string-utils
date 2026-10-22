@@ -93,14 +93,32 @@ struct compressor_cli_t {
 };
 
 /**
- * @brief returns whether a file starts like a FASTA file (with fasta_header_start)
+ * @brief returns whether a symbol can occur in a sequence line of a FASTA file: a letter (a nucleotide or amino acid
+ *        code), '*' (stop codon), '-' or '.' (gap), or '\r' (Windows line end)
+ * @param c a symbol
+ */
+inline bool is_fasta_sequence_symbol(char c)
+{
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '*' || c == '-' || c == '.' || c == '\r';
+}
+
+/**
+ * @brief returns whether a file starts like a FASTA file: with fasta_header_start, and the first line that is no
+ *        header line consists of sequence symbols only (see is_fasta_sequence_symbol)
  * @param path the path of the file
  */
 inline bool starts_like_fasta(const std::string& path)
 {
     direct_ifstream in(path);
-    char first = 0;
-    return in.get(first) && first == fasta_header_start;
+    std::string line;
+    if (!std::getline(in, line) || !line.starts_with(fasta_header_start)) return false;
+
+    while (std::getline(in, line)) {
+        if (line.starts_with(fasta_header_start)) continue;
+        return std::all_of(line.begin(), line.end(), is_fasta_sequence_symbol);
+    }
+
+    return true;
 }
 
 /**
@@ -153,7 +171,7 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
     if (spec.fasta) {
         h.option("-fasta <mode>", "on | off | auto (default: auto)", "store the header lines of FASTA files "
             "separately from the sequences; auto: on for files that start with '" + std::string(1, fasta_header_start)
-            + "'");
+            + "' and whose first sequence line consists of letters, '*', '-' and '.' only");
     }
 
     h.option("-q", "", "print nothing");
