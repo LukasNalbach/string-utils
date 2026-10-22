@@ -44,12 +44,16 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <coding/byte_codes.hpp>
+#include <fasta/restore.hpp>
+#include <fasta/split.hpp>
 #include <misc/cli_help.hpp>
 #include <misc/extraction.hpp>
 #include <misc/files.hpp>
@@ -141,7 +145,8 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
 
     if (spec.ranges) {
         h.option("-ranges <file>", "a path", "with -d: write only these ranges of the text, one '<position> <length>' "
-            "per line (the first position is 0)");
+            "per line (the first position is 0)" + std::string(spec.fasta ? "; of the sequence text if the file was "
+            "compressed in the FASTA mode" : ""));
     }
 
     h.option("-o <base_name>", "a path (default: <input_file>)", "write <base_name>" + ending
@@ -169,9 +174,10 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
     }
 
     if (spec.fasta) {
-        h.option("-fasta <mode>", "on | off | auto (default: auto)", "store the header lines of FASTA files "
-            "separately from the sequences; auto: on for files that start with '" + std::string(1, fasta_header_start)
-            + "' and whose first sequence line consists of letters, '*', '-' and '.' only");
+        h.option("-fasta <mode>", "on | off | auto (default: auto)", "store the header lines and the line layout of "
+            "FASTA files separately from the sequences; auto: on for files that start with '"
+            + std::string(1, fasta_header_start) + "' and whose first sequence line consists of letters, '*', '-' and "
+            "'.' only");
     }
 
     h.option("-q", "", "print nothing");
@@ -451,13 +457,17 @@ inline std::vector<extract_range_t> read_ranges_file(const std::string& path)
 /**
  * @brief restores the text of a file written by a compressor that stores a parsing (or the ranges of -ranges) into
  *        the output file: decompresses the file with its postcompressor into a temporary file next to the output
- *        file, reads the parsing with decompress() or load() and extracts the text
+ *        file, reads the parsing with decompress() or load() and extracts the text. A compressor with a FASTA mode
+ *        stores the mode (text_mode_plain or text_mode_fasta) in the first byte, in the FASTA mode followed by the
+ *        FASTA section (see fasta_section) and the parsing of the sequence text, which is empty if nothing follows;
+ *        -d restores the FASTA file, -ranges extracts ranges of the sequence text.
  * @tparam parsing_t the type of the parsing
  * @param cli the options
  * @param result_type the value of the key "type" of the RESULT line (see -m)
+ * @param with_mode whether the file starts with the mode (the compressor has a FASTA mode)
  */
 template <typename parsing_t>
-void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
+void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, bool with_mode = false)
 {
     std::error_code ec;
     const uint64_t input_bytes = std::filesystem::file_size(cli.path_input_file, ec);
@@ -474,6 +484,8 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
     const auto time_start = now();
     auto time = now();
     parsing_t parsing;
+    std::optional<fasta_section> fasta; // the FASTA section, in the FASTA mode
+    bool empty = false; // whether the file stores no parsing (an empty sequence text in the FASTA mode)
 
     // true <=> parsing_t has no decompress(), i.e., the file stores the serialized parsing
     constexpr bool loads = !requires(parsing_t& x, direct_ifstream& in, uint64_t threads) {
@@ -504,16 +516,29 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
         direct_ifstream in(path_archive);
         require_readable(in, path_archive);
 
-        if constexpr (!loads) parsing.decompress(in, cli.threads);
-        else if constexpr (requires { parsing.load(in, cli.threads); }) parsing.load(in, cli.threads);
-        else parsing.load(in);
+        if (with_mode) {
+            stream_byte_reader reader(in);
+            const uint8_t mode = reader.byte();
+            if (mode != text_mode_plain && mode != text_mode_fasta) throw invalid_file();
+            if (mode == text_mode_fasta) fasta = fasta_section::read(reader);
+            empty = fasta && in.peek() == std::istream::traits_type::eof();
+        }
+
+        if (!empty) {
+            if constexpr (!loads) parsing.decompress(in, cli.threads);
+            else if constexpr (requires { parsing.load(in, cli.threads); }) parsing.load(in, cli.threads);
+            else parsing.load(in);
+        }
 
         log_phase_end(cli.log, time);
     }
 
-    const uint64_t n = parsing.size();
-    if (n == 0) throw std::runtime_error("the text in " + cli.path_input_file + " is empty");
-    std::vector<extract_range_t> ranges { { 0, n } };
+    const uint64_t n = empty ? 0 : parsing.size();
+    if (n == 0 && !fasta) throw std::runtime_error("the text in " + cli.path_input_file + " is empty");
+    // whether the FASTA file is restored
+    const bool restores_fasta = fasta && cli.path_ranges_file.empty();
+    std::vector<extract_range_t> ranges;
+    if (n > 0) ranges = { { 0, n } };
     if (!cli.path_ranges_file.empty()) ranges = read_ranges_file(cli.path_ranges_file);
     uint64_t num_symbols = 0; // the total number of symbols to extract
 
@@ -530,10 +555,22 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type)
         num_symbols += length;
     }
 
-    log_phase_start(cli.log, time, "extracting " + format_size(num_symbols));
+    log_phase_start(cli.log, time, "extracting " + format_size(num_symbols)
+        + (restores_fasta ? " and restoring the FASTA file" : ""));
     phase_progress progress(cli.log, num_symbols);
 
-    if constexpr (extracts_phrase_by_phrase<parsing_t>) {
+    if (restores_fasta) {
+        if constexpr (extracts_phrase_by_phrase<parsing_t>) {
+            throw std::runtime_error("the FASTA mode needs a parsing that is extracted window by window");
+        } else {
+            fasta_output out(cli.path_output_file);
+            fasta_restorer restorer(*fasta, out);
+            extract_windows(parsing, ranges, cli.threads, progress,
+                [&](const char* symbols, uint64_t length) { restorer.append(symbols, length); });
+            restorer.finish();
+            out.finish();
+        }
+    } else if constexpr (extracts_phrase_by_phrase<parsing_t>) {
         extract_phrases_to_file(parsing, ranges, num_symbols, cli.path_output_file, cli.threads, progress);
     } else {
         direct_ofstream out(cli.path_output_file);
