@@ -54,6 +54,125 @@ function(string_utils_fetch_submodules project_dir)
   endif()
 endfunction()
 
+# string_utils_add_components(<component>...)
+#
+# adds the libraries of string-utils beyond the core (the target string_utils) and downloads their submodules; a
+# project calls it after string-utils has been added, for each library it links (a component that has already been
+# added is skipped):
+#   sdsl      sdsl: all of sdsl-lite (the core has the sources its headers need) with libdivsufsort (divsufsort,
+#             divsufsort64)
+#   libsais   libsais and libsais40 (the 40-bit variant)
+#   gtl       gtl
+#   emhash    emhash
+#   tests     string_utils_test: the test helpers (tests/) and googletest
+function(string_utils_add_components)
+  set(source_dir "${STRING_UTILS_SOURCE_DIR}")
+  set(external_dir "${STRING_UTILS_EXTERNAL_DIR}")
+  set(binary_dir "${STRING_UTILS_BINARY_DIR}")
+
+  foreach(component IN LISTS ARGN)
+    if(component STREQUAL "sdsl")
+      if(TARGET sdsl)
+        continue()
+      endif()
+
+      set(sdsl_root "${external_dir}/sdsl-lite")
+      string_utils_fetch_submodules("${sdsl_root}" PATHS external/libdivsufsort)
+
+      # libdivsufsort (bundled with sdsl-lite)
+      set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+      set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+      set(BUILD_DIVSUFSORT64 ON CACHE BOOL "" FORCE)
+      set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
+      set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+      add_subdirectory("${sdsl_root}/external/libdivsufsort" "${binary_dir}/external/libdivsufsort" EXCLUDE_FROM_ALL)
+      unset(CMAKE_POLICY_VERSION_MINIMUM)
+      set(CMAKE_WARN_DEPRECATED ON CACHE BOOL "" FORCE)
+      set(divsufsort_include_dir "${binary_dir}/external/libdivsufsort/include")
+      set_target_properties(divsufsort divsufsort64 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      target_include_directories(divsufsort INTERFACE "${divsufsort_include_dir}")
+      target_include_directories(divsufsort64 INTERFACE "${divsufsort_include_dir}")
+
+      # the sources of sdsl that are not in sdsl_core
+      file(GLOB sdsl_sources "${sdsl_root}/lib/*.cpp")
+      list(TRANSFORM STRING_UTILS_SDSL_CORE_SOURCES PREPEND "${sdsl_root}/lib/" OUTPUT_VARIABLE sdsl_core_sources)
+      list(REMOVE_ITEM sdsl_sources ${sdsl_core_sources})
+      add_library(sdsl STATIC EXCLUDE_FROM_ALL ${sdsl_sources})
+      set_target_properties(sdsl PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      target_compile_options(sdsl PRIVATE -w -DNDEBUG -fpermissive)
+      target_include_directories(sdsl PRIVATE "${divsufsort_include_dir}")
+      target_link_libraries(sdsl PUBLIC sdsl_core divsufsort divsufsort64)
+      string_utils_mark_system(divsufsort divsufsort64)
+      string_utils_silence_warnings(divsufsort divsufsort64)
+    elseif(component STREQUAL "libsais")
+      if(TARGET libsais)
+        continue()
+      endif()
+
+      set(libsais_root "${external_dir}/libsais")
+      string_utils_fetch_submodules("${source_dir}" PATHS external/libsais)
+      string_utils_apply_patches("${source_dir}")
+
+      add_library(libsais STATIC EXCLUDE_FROM_ALL "${libsais_root}/src/libsais.c" "${libsais_root}/src/libsais16.c"
+        "${libsais_root}/src/libsais16x64.c" "${libsais_root}/src/libsais64.c")
+      set_target_properties(libsais PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        POSITION_INDEPENDENT_CODE ON)
+      target_include_directories(libsais PUBLIC "${libsais_root}/include")
+      target_compile_definitions(libsais PUBLIC LIBSAIS_OPENMP)
+      target_link_libraries(libsais PUBLIC OpenMP::OpenMP_C)
+
+      add_library(libsais40 STATIC EXCLUDE_FROM_ALL "${libsais_root}/src/libsais40.cpp"
+        "${libsais_root}/src/libsais16x40.cpp")
+      target_include_directories(libsais40 PUBLIC "${libsais_root}/include" "${source_dir}/include")
+      target_compile_definitions(libsais40 PUBLIC LIBSAIS_OPENMP)
+      target_compile_options(libsais40 PRIVATE -fno-strict-aliasing)
+      target_link_libraries(libsais40 PUBLIC OpenMP::OpenMP_CXX)
+      set_target_properties(libsais40 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+      string_utils_mark_system(libsais)
+      string_utils_silence_warnings(libsais)
+    elseif(component STREQUAL "gtl")
+      if(TARGET gtl)
+        continue()
+      endif()
+
+      string_utils_fetch_submodules("${source_dir}" PATHS external/gtl)
+      add_library(gtl INTERFACE)
+      target_include_directories(gtl INTERFACE "${external_dir}/gtl/include")
+      string_utils_mark_system(gtl)
+    elseif(component STREQUAL "emhash")
+      if(TARGET emhash)
+        continue()
+      endif()
+
+      string_utils_fetch_submodules("${source_dir}" PATHS external/emhash)
+      add_library(emhash INTERFACE)
+      target_include_directories(emhash INTERFACE "${external_dir}/emhash/")
+      string_utils_mark_system(emhash)
+    elseif(component STREQUAL "tests")
+      if(TARGET string_utils_test)
+        continue()
+      endif()
+
+      string_utils_add_components(libsais gtl)
+      string_utils_fetch_submodules("${source_dir}" PATHS external/googletest)
+      add_subdirectory("${external_dir}/googletest" "${binary_dir}/external/googletest" EXCLUDE_FROM_ALL)
+      set_target_properties(gtest gtest_main gmock gmock_main PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "")
+      string_utils_mark_system(gtest gtest_main gmock gmock_main)
+      string_utils_silence_warnings(gtest gtest_main gmock gmock_main)
+
+      add_library(string_utils_test INTERFACE)
+      target_include_directories(string_utils_test INTERFACE "${source_dir}/tests/")
+      target_link_libraries(string_utils_test INTERFACE string_utils libsais libsais40 gtl gtest_main)
+
+      if(STRING_UTILS_FAST_TESTS)
+        target_compile_options(string_utils_test INTERFACE -O0)
+      endif()
+    else()
+      message(FATAL_ERROR "string_utils_add_components: unknown component ${component}")
+    endif()
+  endforeach()
+endfunction()
+
 # string_utils_apply_patches(<project dir>)
 #
 # applies each patch <project dir>/patches/<path below external/>.patch (written by patches/make-patch.sh

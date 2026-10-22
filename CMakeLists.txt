@@ -14,13 +14,15 @@ endif()
 string_utils_option(USE_MALLOC_COUNT "Track memory usage via malloc_count (overrides malloc/free)" ON)
 string_utils_option(EXTERN_TEMPLATES "Compile the instantiation libraries once instead of in every translation unit" ON)
 
-string_utils_fetch_submodules("${CMAKE_CURRENT_SOURCE_DIR}" RECURSIVE PATHS
-  external/sdsl-lite external/sux external/malloc_count external/ips4o external/ips2ra
-  external/libsais external/gtl external/emhash external/googletest)
+# the submodules of the core (string_utils); the others are downloaded by string_utils_add_components
+string_utils_fetch_submodules("${CMAKE_CURRENT_SOURCE_DIR}" PATHS
+  external/sdsl-lite external/sux external/malloc_count external/ips4o external/ips2ra)
 string_utils_apply_patches("${CMAKE_CURRENT_SOURCE_DIR}")
 
 set(STRING_UTILS_EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external" CACHE INTERNAL
   "directory of the third-party libraries of string-utils")
+set(STRING_UTILS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "source directory of string-utils")
+set(STRING_UTILS_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE INTERNAL "build directory of string-utils")
 
 ############################# third-party libraries #############################
 
@@ -32,9 +34,17 @@ foreach(openmp OpenMP::OpenMP_CXX OpenMP::OpenMP_C)
   endif()
 endforeach()
 
+# MinGW: the static libgomp calls dlopen and dlsym, which MinGW's libdl provides (linked after libgomp)
+if(MINGW)
+  foreach(openmp OpenMP::OpenMP_CXX OpenMP::OpenMP_C)
+    if(TARGET ${openmp})
+      set_property(TARGET ${openmp} APPEND PROPERTY INTERFACE_LINK_LIBRARIES dl)
+    endif()
+  endforeach()
+endif()
+
 # ips4o (on Windows with a queue of jobs without TBB, see patches/ips4o.patch)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips4o")
-set_target_properties(ips4o_example PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips4o" EXCLUDE_FROM_ALL)
 
 if(WIN32)
   target_compile_definitions(ips4o INTERFACE IPS4O_NO_TBB)
@@ -43,28 +53,11 @@ endif()
 # ips2ra (its parallel sort is compiled through _REENTRANT; on Windows with a queue of jobs without TBB, see
 # patches/ips2ra.patch)
 set(IPS2RA_DISABLE_PARALLEL ON CACHE BOOL "" FORCE)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips2ra")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips2ra" EXCLUDE_FROM_ALL)
 
 if(WIN32)
   target_compile_definitions(ips2ra INTERFACE IPS2RA_NO_TBB)
 endif()
-
-# libsais
-set(LIBSAIS_USE_OPENMP ON CACHE BOOL "" FORCE)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/libsais/")
-
-add_library(libsais40 STATIC
-  "${CMAKE_CURRENT_SOURCE_DIR}/external/libsais/src/libsais40.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/external/libsais/src/libsais16x40.cpp"
-)
-target_include_directories(libsais40 PUBLIC
-  "${CMAKE_CURRENT_SOURCE_DIR}/external/libsais/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/include"
-)
-target_compile_definitions(libsais40 PUBLIC LIBSAIS_OPENMP)
-target_compile_options(libsais40 PRIVATE -fno-strict-aliasing)
-target_link_libraries(libsais40 PUBLIC OpenMP::OpenMP_CXX)
-set_target_properties(libsais40 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # malloc_count; on Windows src/malloc_count_windows.cpp, which replaces the heap functions of the C runtime: with the
 # MSVC ABI only those of the static C runtime (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded, see cmake/settings.cmake)
@@ -83,63 +76,24 @@ else()
   target_compile_definitions(malloc_count INTERFACE STRING_UTILS_USE_MALLOC_COUNT=0)
 endif()
 
-# MinGW: the static libgomp calls dlopen and dlsym, which MinGW's libdl provides (linked after libgomp); after the
-# last find_package(OpenMP) (libsais calls it, too), which sets the libraries of the OpenMP targets anew
-if(MINGW)
-  foreach(openmp OpenMP::OpenMP_CXX OpenMP::OpenMP_C)
-    if(TARGET ${openmp})
-      set_property(TARGET ${openmp} APPEND PROPERTY INTERFACE_LINK_LIBRARIES dl)
-    endif()
-  endforeach()
-endif()
-
-# sdsl
+# the sources of sdsl the headers of string-utils need (the others are in the library sdsl, see
+# string_utils_add_components)
 set(SDSL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/external/sdsl-lite")
-set(SDSL_INCLUDE_DIR "${SDSL_ROOT}/include")
-
-# libdivsufsort (bundled with sdsl-lite)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_DIVSUFSORT64 ON CACHE BOOL "" FORCE)
-set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-add_subdirectory("${SDSL_ROOT}/external/libdivsufsort" "${CMAKE_CURRENT_BINARY_DIR}/external/libdivsufsort")
-unset(CMAKE_POLICY_VERSION_MINIMUM)
-set(CMAKE_WARN_DEPRECATED ON CACHE BOOL "" FORCE)
-set(DIVSUFSORT_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/external/libdivsufsort/include")
-set_target_properties(divsufsort divsufsort64 PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(divsufsort INTERFACE "${DIVSUFSORT_INCLUDE_DIR}")
-target_include_directories(divsufsort64 INTERFACE "${DIVSUFSORT_INCLUDE_DIR}")
-
-# sdsl static library
-file(GLOB sdsl_sources "${SDSL_ROOT}/lib/*.cpp")
-add_library(sdsl STATIC ${sdsl_sources})
-set_target_properties(sdsl PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_options(sdsl PRIVATE -w -DNDEBUG -fpermissive)
-target_include_directories(sdsl PUBLIC "${SDSL_INCLUDE_DIR}")
-target_include_directories(sdsl PRIVATE "${DIVSUFSORT_INCLUDE_DIR}")
-target_link_libraries(sdsl PUBLIC divsufsort divsufsort64)
-
-# gtl
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/gtl/")
-
-# emhash
-add_library(emhash INTERFACE)
-target_include_directories(emhash INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/external/emhash/")
+set(STRING_UTILS_SDSL_CORE_SOURCES bits.cpp bp_support_algorithm.cpp memory_management.cpp ram_fs.cpp util.cpp
+  CACHE INTERNAL "the sources of sdsl in sdsl_core, in ${SDSL_ROOT}/lib/")
+list(TRANSFORM STRING_UTILS_SDSL_CORE_SOURCES PREPEND "${SDSL_ROOT}/lib/" OUTPUT_VARIABLE sdsl_core_sources)
+add_library(sdsl_core STATIC EXCLUDE_FROM_ALL ${sdsl_core_sources})
+set_target_properties(sdsl_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_options(sdsl_core PRIVATE -w -DNDEBUG -fpermissive)
+target_include_directories(sdsl_core PUBLIC "${SDSL_ROOT}/include")
 
 # sux
 add_library(sux INTERFACE)
 target_include_directories(sux INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/external/sux/")
 
-# googletest (only built if a test links it)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/googletest/" EXCLUDE_FROM_ALL)
-set_target_properties(gtest gtest_main gmock gmock_main
-  PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "")
-
 ############################# string-utils #############################
 
-set(string_utils_dependencies
-  OpenMP::OpenMP_CXX sdsl libsais libsais40 ips4o ips2ra gtl malloc_count emhash sux divsufsort divsufsort64)
+set(string_utils_dependencies OpenMP::OpenMP_CXX sdsl_core ips4o ips2ra malloc_count sux)
 
 add_library(string_utils INTERFACE)
 target_include_directories(string_utils INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
@@ -148,7 +102,7 @@ target_link_libraries(string_utils INTERFACE ${string_utils_dependencies})
 
 if(STRING_UTILS_EXTERN_TEMPLATES)
   # explicit instantiations of the sort functions (see misc/sort.hpp)
-  add_library(string_utils_sort STATIC src/sort.cpp)
+  add_library(string_utils_sort STATIC EXCLUDE_FROM_ALL src/sort.cpp)
   target_include_directories(string_utils_sort PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
   target_link_libraries(string_utils_sort PRIVATE ${string_utils_dependencies})
   target_link_libraries(string_utils INTERFACE string_utils_sort)
@@ -158,7 +112,7 @@ endif()
 
 # the Windows functions of misc/platform.hpp
 if(WIN32)
-  add_library(string_utils_platform STATIC src/platform_windows.cpp)
+  add_library(string_utils_platform STATIC EXCLUDE_FROM_ALL src/platform_windows.cpp)
   target_include_directories(string_utils_platform PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
   target_link_libraries(string_utils_platform PRIVATE OpenMP::OpenMP_CXX)
   # advapi32: the privilege for large pages (see platform::enable_large_pages)
@@ -183,18 +137,16 @@ if(MINGW)
   target_link_options(string_utils INTERFACE -static)
 endif()
 
-# test helpers (tests/) and googletest
-add_library(string_utils_test INTERFACE)
-target_include_directories(string_utils_test INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/tests/")
-target_link_libraries(string_utils_test INTERFACE string_utils gtest_main)
+string_utils_mark_system(sdsl_core ips4o ips2ra sux malloc_count)
+string_utils_silence_warnings(sdsl_core ips4o ips2ra sux malloc_count)
 
-if(STRING_UTILS_FAST_TESTS)
-  target_compile_options(string_utils_test INTERFACE -O0)
+# a build of string-utils alone builds all of its libraries
+if(PROJECT_IS_TOP_LEVEL)
+  string_utils_add_components(sdsl libsais gtl emhash tests)
+  add_custom_target(string_utils_libraries ALL)
+  add_dependencies(string_utils_libraries sdsl_core sdsl libsais libsais40 divsufsort divsufsort64)
+
+  if(TARGET string_utils_sort)
+    add_dependencies(string_utils_libraries string_utils_sort)
+  endif()
 endif()
-
-set(string_utils_external_targets
-  sdsl divsufsort divsufsort64 libsais ips4o ips2ra gtl emhash sux malloc_count
-  gtest gtest_main gmock gmock_main)
-
-string_utils_mark_system(${string_utils_external_targets})
-string_utils_silence_warnings(${string_utils_external_targets})

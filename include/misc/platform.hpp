@@ -40,6 +40,7 @@
 #ifndef STRING_UTILS_MISC_PLATFORM_HPP
 #define STRING_UTILS_MISC_PLATFORM_HPP
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -412,6 +413,15 @@ public:
         return *this;
     }
 
+    // returns whether both sets contain the same CPUs
+    bool operator==(const cpu_mask& other) const
+    {
+        for (uint64_t g = 0; g < std::max(groups.size(), other.groups.size()); g++)
+            if (group_mask(g) != other.group_mask(g)) return false;
+
+        return true;
+    }
+
     // returns the number of groups (the groups [num_groups()..] have no CPU in the set)
     uint64_t num_groups() const { return groups.size(); }
 
@@ -431,6 +441,9 @@ uint64_t num_online_cpus();
 
 // returns the set of all num_cpus = num_online_cpus() online CPUs
 cpu_mask all_cpus(uint64_t num_cpus);
+
+// returns the CPUs the process may run on: all online CPUs (a process can use the CPUs of all processor groups)
+inline cpu_mask process_cpus() { return all_cpus(num_online_cpus()); }
 
 // stores the CPUs the calling thread may run on in cpus; returns whether this succeeded
 bool get_thread_cpus(cpu_mask& cpus);
@@ -471,6 +484,9 @@ public:
         return *this;
     }
 
+    // returns whether both sets contain the same CPUs
+    bool operator==(const cpu_mask& other) const { return CPU_EQUAL(&cpus, &other.cpus); }
+
     // returns the cpu_set_t of the set
     cpu_set_t* native() { return &cpus; }
     const cpu_set_t* native() const { return &cpus; }
@@ -493,6 +509,15 @@ inline cpu_mask all_cpus(uint64_t num_cpus)
 
 // stores the CPUs the calling thread may run on in cpus; returns whether this succeeded
 inline bool get_thread_cpus(cpu_mask& cpus) { return sched_getaffinity(0, sizeof(cpu_set_t), cpus.native()) == 0; }
+
+// returns the CPUs the main thread of the process may run on (sched_getaffinity), or all online CPUs if they cannot be
+// read
+inline cpu_mask process_cpus()
+{
+    cpu_mask cpus;
+    if (sched_getaffinity(getpid(), sizeof(cpu_set_t), cpus.native()) == 0 && cpus.count() > 0) return cpus;
+    return all_cpus(num_online_cpus());
+}
 
 // restricts the calling thread to a set of CPUs; returns whether this succeeded
 inline bool set_thread_cpus(const cpu_mask& cpus)
