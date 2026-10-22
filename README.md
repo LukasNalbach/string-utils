@@ -62,7 +62,7 @@ With `EXCLUDE_FROM_ALL`, the build compiles only the libraries of string-utils t
 | `libsais` | `libsais` and its 40-bit variant `libsais40` |
 | `gtl` | `gtl` |
 | `emhash` | `emhash` |
-| `tests` | `string_utils_test`: the test helpers (`tests/`) with googletest, libsais and gtl |
+| `tests` | `string_utils_test`: the test helpers (`tests/`) with googletest; a test that includes `test-references.hpp` also links `libsais` and `gtl` |
 
 `settings.cmake` sets the C++ standard, the compiler flags of the build types and the Windows toolchain settings; only the top-level project includes it. `string_utils.cmake` provides the functions `string_utils_option`, `string_utils_add_components`, `string_utils_fetch_submodules`, `string_utils_apply_patches`, `string_utils_add_executable`, `string_utils_mark_system` and `string_utils_silence_warnings`.
 

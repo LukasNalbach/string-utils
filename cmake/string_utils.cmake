@@ -64,7 +64,8 @@ endfunction()
 #   libsais   libsais and libsais40 (the 40-bit variant)
 #   gtl       gtl
 #   emhash    emhash
-#   tests     string_utils_test: the test helpers (tests/) and googletest
+#   tests     string_utils_test: the test helpers (tests/) and googletest; a test that includes test-references.hpp
+#             also links libsais and gtl
 function(string_utils_add_components)
   set(source_dir "${STRING_UTILS_SOURCE_DIR}")
   set(external_dir "${STRING_UTILS_EXTERNAL_DIR}")
@@ -153,7 +154,6 @@ function(string_utils_add_components)
         continue()
       endif()
 
-      string_utils_add_components(libsais gtl)
       string_utils_fetch_submodules("${source_dir}" PATHS external/googletest)
       add_subdirectory("${external_dir}/googletest" "${binary_dir}/external/googletest" EXCLUDE_FROM_ALL)
       set_target_properties(gtest gtest_main gmock gmock_main PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "")
@@ -162,7 +162,7 @@ function(string_utils_add_components)
 
       add_library(string_utils_test INTERFACE)
       target_include_directories(string_utils_test INTERFACE "${source_dir}/tests/")
-      target_link_libraries(string_utils_test INTERFACE string_utils libsais libsais40 gtl gtest_main)
+      target_link_libraries(string_utils_test INTERFACE string_utils gtest_main)
 
       if(STRING_UTILS_FAST_TESTS)
         target_compile_options(string_utils_test INTERFACE -O0)
