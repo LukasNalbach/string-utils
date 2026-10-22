@@ -24,7 +24,7 @@ The code builds on Linux with GCC or Clang and on Windows with Clang (MSVC ABI) 
 ## Build
 
 ```shell
-git clone --recursive https://github.com/LukasNalbach/string-utils.git
+git clone https://github.com/LukasNalbach/string-utils.git
 cd string-utils
 cmake -B build -G Ninja
 cmake --build build
