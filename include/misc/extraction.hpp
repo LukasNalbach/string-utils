@@ -558,18 +558,17 @@ void extract_phrases_to_file(const parsing_t& parsing, const std::vector<extract
 
 /**
  * @brief extracts ranges of the text window by window (extract_window_length symbols at a time; the threads extract
- *        disjoint pieces of a window in parallel) and writes them to a stream
+ *        disjoint pieces of a window in parallel) and passes the windows in the order of the text to a function
  * @tparam parsing_t type of the parsing
  * @param parsing the parsing
  * @param ranges the ranges (position, length), with 1 <= length <= n - position
- * @param out the stream the text is written to
- * @param newline_after_range whether a newline is written after each range
  * @param p the number of threads
  * @param progress counts the extracted symbols
+ * @param write called as write(symbols, length) for each window
  */
-template <typename parsing_t>
-void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t>& ranges, std::ostream& out,
-    bool newline_after_range, uint64_t p, phase_progress& progress)
+template <typename parsing_t, typename write_fnc_t>
+void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t>& ranges, uint64_t p,
+    phase_progress& progress, write_fnc_t write)
 {
     std::string window; // the symbols of the current window
 
@@ -595,10 +594,31 @@ void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t
                 }
             }
 
-            out.write(window.data(), std::streamsize(window_length));
-            if (!out) throw std::runtime_error("cannot write the extracted text");
+            write(window.data(), window_length);
             progress.advance(window_length);
         }
+    }
+}
+
+/**
+ * @brief extracts ranges of the text window by window (see above) and writes them to a stream
+ * @tparam parsing_t type of the parsing
+ * @param parsing the parsing
+ * @param ranges the ranges (position, length), with 1 <= length <= n - position
+ * @param out the stream the text is written to
+ * @param newline_after_range whether a newline is written after each range
+ * @param p the number of threads
+ * @param progress counts the extracted symbols
+ */
+template <typename parsing_t>
+void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t>& ranges, std::ostream& out,
+    bool newline_after_range, uint64_t p, phase_progress& progress)
+{
+    for (const extract_range_t& range : ranges) {
+        extract_windows(parsing, { range }, p, progress, [&](const char* symbols, uint64_t length) {
+            out.write(symbols, std::streamsize(length));
+            if (!out) throw std::runtime_error("cannot write the extracted text");
+        });
 
         if (newline_after_range) out << '\n';
     }
