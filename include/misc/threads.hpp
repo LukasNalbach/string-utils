@@ -41,42 +41,85 @@
 #include <misc/log.hpp>
 #include <misc/platform.hpp>
 
+// the CPUs the process may run on, read before main (before OpenMP binds a thread to a place)
+inline const platform::cpu_mask startup_cpus = platform::process_cpus();
+
+// the CPUs of the innermost full_affinity in scope on the calling thread (nullptr if there is none)
+inline thread_local const platform::cpu_mask* scoped_cpus = nullptr;
+
 /**
- * @brief sets the affinity of the calling thread to all online CPUs, if it is restricted to fewer CPUs
- * @return whether the affinity has been changed
+ * @brief returns the CPUs the process may run on: the CPUs it could run on when it started and the CPUs of the OpenMP
+ *        places (OMP_PLACES)
  */
-inline bool set_affinity_to_all_cpus()
+inline const platform::cpu_mask& process_cpus()
 {
-    const uint64_t num_online_cpus = platform::num_online_cpus();
-    if (num_online_cpus == 0) return false;
+    static const platform::cpu_mask cpus = [] {
+        platform::cpu_mask all = startup_cpus.count() > 0 ? startup_cpus : platform::process_cpus();
 
-    platform::cpu_mask cur_cpus;
-    if (!platform::get_thread_cpus(cur_cpus)) return false;
-    if (cur_cpus.count() >= num_online_cpus) return false;
+        for (int place = 0; place < omp_get_num_places(); place++) {
+            std::vector<int> ids(omp_get_place_num_procs(place));
+            omp_get_place_proc_ids(place, ids.data());
+            for (int id : ids) all.set(uint64_t(id));
+        }
 
-    return platform::set_thread_cpus(platform::all_cpus(num_online_cpus));
+        return all;
+    }();
+
+    return cpus;
 }
 
 /**
- * @brief sets the affinity of the calling thread to all online CPUs while in scope and restores it afterwards;
- *        threads not created by OpenMP and child processes started meanwhile inherit it
+ * @brief returns the CPUs the calling thread may run on: those of the innermost full_affinity in scope on the thread,
+ *        or all CPUs of the process (see process_cpus)
+ */
+inline const platform::cpu_mask& allowed_cpus() { return scoped_cpus != nullptr ? *scoped_cpus : process_cpus(); }
+
+/**
+ * @brief sets the affinity of the calling thread to a set of CPUs, if it is not already that set
+ * @param cpus the CPUs (by default the CPUs the thread may run on, see allowed_cpus)
+ * @return whether the affinity has been changed
+ */
+inline bool set_affinity_to_allowed_cpus(const platform::cpu_mask& cpus = allowed_cpus())
+{
+    platform::cpu_mask cur_cpus;
+    if (!platform::get_thread_cpus(cur_cpus) || cur_cpus == cpus) return false;
+    return platform::set_thread_cpus(cpus);
+}
+
+/**
+ * @brief sets the affinity of the calling thread to a set of CPUs while in scope and restores it afterwards; while in
+ *        scope, the set is also the set of CPUs the thread may run on (see allowed_cpus); threads not created by OpenMP
+ *        and child processes started meanwhile inherit the affinity, other threads the code in scope starts get it
+ *        with full_affinity(cpus())
  */
 class full_affinity {
+    platform::cpu_mask _cpus; // the CPUs the calling thread runs on while in scope
     platform::cpu_mask _prev_cpus; // the CPUs the calling thread was allowed to run on before
+    const platform::cpu_mask* _prev_scoped_cpus; // the CPUs of the enclosing full_affinity (see scoped_cpus)
     bool _restore = false; // true <=> the affinity has been changed and is restored by the destructor
 
 public:
-    full_affinity()
-    {
-        if (!platform::get_thread_cpus(_prev_cpus)) return;
+    // sets the affinity to the CPUs the calling thread may run on (see allowed_cpus)
+    full_affinity() : full_affinity(allowed_cpus()) { }
 
-        _restore = set_affinity_to_all_cpus();
+    // sets the affinity to a set of CPUs
+    explicit full_affinity(const platform::cpu_mask& cpus) : _cpus(cpus), _prev_scoped_cpus(scoped_cpus)
+    {
+        scoped_cpus = &_cpus;
+        if (platform::get_thread_cpus(_prev_cpus)) _restore = set_affinity_to_allowed_cpus(_cpus);
     }
 
     full_affinity(const full_affinity&) = delete;
     full_affinity& operator=(const full_affinity&) = delete;
 
-    ~full_affinity() { if (_restore) platform::set_thread_cpus(_prev_cpus); }
+    ~full_affinity()
+    {
+        if (_restore) platform::set_thread_cpus(_prev_cpus);
+        scoped_cpus = _prev_scoped_cpus;
+    }
+
+    // returns the CPUs the calling thread runs on while in scope
+    const platform::cpu_mask& cpus() const { return _cpus; }
 };
 
 /**
@@ -153,21 +196,22 @@ inline void run_on_threads(uint64_t num_threads, fnc_t fnc)
 }
 
 /**
- * @brief runs tasks at the same time, each on a thread of an OpenMP team; the thread of a task runs on all CPUs
- *        (see full_affinity), and nested parallel regions are enabled while the tasks run; after all tasks have
- *        finished, the exception of the first task that threw one is rethrown
+ * @brief runs tasks at the same time, each on a thread of an OpenMP team; the thread of a task runs on the CPUs the
+ *        calling thread may run on (see full_affinity and allowed_cpus), and nested parallel regions are enabled while
+ *        the tasks run; after all tasks have finished, the exception of the first task that threw one is rethrown
  * @param tasks the tasks; task k is called as tasks[k]()
  */
 inline void run_concurrently(const std::vector<std::function<void()>>& tasks)
 {
     if (tasks.empty()) return;
     std::vector<std::exception_ptr> failures(tasks.size());
+    const platform::cpu_mask& cpus = allowed_cpus();
     const int max_levels = omp_get_max_active_levels();
     omp_set_max_active_levels(omp_get_supported_active_levels());
 
     #pragma omp parallel num_threads(tasks.size())
     {
-        const full_affinity affinity;
+        const full_affinity affinity(cpus);
 
         // the team can have fewer threads than there are tasks
         for (uint64_t k = omp_get_thread_num(); k < tasks.size(); k += omp_get_num_threads()) {

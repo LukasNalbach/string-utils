@@ -46,15 +46,25 @@ if(NOT TARGET string_utils)
   if(PROJECT_IS_TOP_LEVEL)
     include("${CMAKE_CURRENT_SOURCE_DIR}/external/string-utils/cmake/settings.cmake")
   endif()
-  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/string-utils")
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/string-utils" EXCLUDE_FROM_ALL)
 endif()
 
-target_link_libraries(<target> PRIVATE string_utils)  # headers and libraries
-target_link_libraries(<test> PRIVATE string_utils_test)  # also the test
-                                                         # helpers and googletest
+string_utils_add_components(libsais)  # libraries beyond the core
+
+target_link_libraries(<target> PRIVATE string_utils libsais40)
 ```
 
-`settings.cmake` sets the C++ standard, the compiler flags of the build types and the Windows toolchain settings; only the top-level project includes it. `string_utils.cmake` provides the functions `string_utils_option`, `string_utils_fetch_submodules`, `string_utils_apply_patches`, `string_utils_add_executable`, `string_utils_mark_system` and `string_utils_silence_warnings`.
+With `EXCLUDE_FROM_ALL`, the build compiles only the libraries of string-utils that a target of the project links. The target `string_utils` is the core: the headers, OpenMP, the sources of sdsl-lite the headers need (`sdsl_core`), sux, ips4o, ips2ra and malloc_count; `cmake` downloads only their submodules. `string_utils_add_components(<component>...)` adds further libraries and downloads their submodules:
+
+| Component | Targets |
+| --- | --- |
+| `sdsl` | `sdsl`: all of sdsl-lite, with libdivsufsort (`divsufsort`, `divsufsort64`) |
+| `libsais` | `libsais` and its 40-bit variant `libsais40` |
+| `gtl` | `gtl` |
+| `emhash` | `emhash` |
+| `tests` | `string_utils_test`: the test helpers (`tests/`) with googletest, libsais and gtl |
+
+`settings.cmake` sets the C++ standard, the compiler flags of the build types and the Windows toolchain settings; only the top-level project includes it. `string_utils.cmake` provides the functions `string_utils_option`, `string_utils_add_components`, `string_utils_fetch_submodules`, `string_utils_apply_patches`, `string_utils_add_executable`, `string_utils_mark_system` and `string_utils_silence_warnings`.
 
 ## Options and environment variables
 
