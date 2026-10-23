@@ -5,6 +5,8 @@ include_guard(GLOBAL)
 
 include("${CMAKE_CURRENT_LIST_DIR}/string_utils.cmake")
 
+string_utils_sync_submodules("${CMAKE_SOURCE_DIR}")
+
 set(CMAKE_CXX_STANDARD 20)
 
 if(NOT CMAKE_BUILD_TYPE)
