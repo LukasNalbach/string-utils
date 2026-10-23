@@ -306,10 +306,10 @@ index 0000000..0d7f043
 +#endif
 diff --git a/include/libsais40.h b/include/libsais40.h
 new file mode 100644
-index 0000000..e1d5480
+index 0000000..b6ea0a8
 --- /dev/null
 +++ b/include/libsais40.h
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,340 @@
 +/*
 +
 +This file is a part of libsais, a library for linear time suffix array,
@@ -619,10 +619,40 @@ index 0000000..e1d5480
 +
 +} // namespace libsais40_impl
 +
++// the functions of libsais40_impl with 48-bit integers (src/libsais40.cpp compiled with LIBSAIS_PACKED_BYTES=6)
++namespace libsais48_impl {
++
++    int64_t libsais48(const uint8_t * T, sa_int48_t * SA, int64_t n, int64_t fs, sa_int48_t * freq);
++    int64_t libsais48_gsa(const uint8_t * T, sa_int48_t * SA, int64_t n, int64_t fs, sa_int48_t * freq);
++    int64_t libsais48_long(sa_int48_t * T, sa_int48_t * SA, int64_t n, int64_t k, int64_t fs);
++    int64_t libsais48_bwt(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, int64_t fs, sa_int48_t * freq);
++    int64_t libsais48_bwt_aux(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, int64_t fs, sa_int48_t * freq, int64_t r, sa_int48_t * I);
++    int64_t libsais48_unbwt(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, const sa_int48_t * freq, int64_t i);
++    int64_t libsais48_unbwt_aux(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, const sa_int48_t * freq, int64_t r, const sa_int48_t * I);
++    int64_t libsais48_plcp(const uint8_t * T, const sa_int48_t * SA, sa_int48_t * PLCP, int64_t n);
++    int64_t libsais48_plcp_int(const sa_int48_t * T, const sa_int48_t * SA, sa_int48_t * PLCP, int64_t n);
++    int64_t libsais48_plcp_gsa(const uint8_t * T, const sa_int48_t * SA, sa_int48_t * PLCP, int64_t n);
++    int64_t libsais48_lcp(const sa_int48_t * PLCP, const sa_int48_t * SA, sa_int48_t * LCP, int64_t n);
++
++#if defined(LIBSAIS_OPENMP)
++    int64_t libsais48_omp(const uint8_t * T, sa_int48_t * SA, int64_t n, int64_t fs, sa_int48_t * freq, int64_t threads);
++    int64_t libsais48_gsa_omp(const uint8_t * T, sa_int48_t * SA, int64_t n, int64_t fs, sa_int48_t * freq, int64_t threads);
++    int64_t libsais48_long_omp(sa_int48_t * T, sa_int48_t * SA, int64_t n, int64_t k, int64_t fs, int64_t threads);
++    int64_t libsais48_bwt_omp(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, int64_t fs, sa_int48_t * freq, int64_t threads);
++    int64_t libsais48_bwt_aux_omp(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, int64_t fs, sa_int48_t * freq, int64_t r, sa_int48_t * I, int64_t threads);
++    int64_t libsais48_unbwt_omp(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, const sa_int48_t * freq, int64_t i, int64_t threads);
++    int64_t libsais48_unbwt_aux_omp(const uint8_t * T, uint8_t * U, sa_int48_t * A, int64_t n, const sa_int48_t * freq, int64_t r, const sa_int48_t * I, int64_t threads);
++    int64_t libsais48_plcp_omp(const uint8_t * T, const sa_int48_t * SA, sa_int48_t * PLCP, int64_t n, int64_t threads);
++    int64_t libsais48_plcp_gsa_omp(const uint8_t * T, const sa_int48_t * SA, sa_int48_t * PLCP, int64_t n, int64_t threads);
++    int64_t libsais48_lcp_omp(const sa_int48_t * PLCP, const sa_int48_t * SA, sa_int48_t * LCP, int64_t n, int64_t threads);
++#endif
++
++} // namespace libsais48_impl
++
 +#endif
 diff --git a/include/libsais40.hpp b/include/libsais40.hpp
 new file mode 100644
-index 0000000..905cfa6
+index 0000000..3e69493
 --- /dev/null
 +++ b/include/libsais40.hpp
 @@ -0,0 +1,170 @@
@@ -655,7 +685,7 @@ index 0000000..905cfa6
 +template <typename sym_t>
 +static constexpr bool libsais40_supports =
 +    (std::is_integral_v<sym_t> && std::is_unsigned_v<sym_t>) ||
-+    std::is_same_v<sym_t, uint40_t> || std::is_same_v<sym_t, __uint128_t>;
++    is_packed_unsigned_v<sym_t> || std::is_same_v<sym_t, __uint128_t>;
 +
 +// casts a pointer to uint40_t values to a pointer to the 40-bit integers used by libsais40
 +inline sa_int40_t* sa40_entries(uint40_t* v) { return reinterpret_cast<sa_int40_t*>(v); }
@@ -685,7 +715,7 @@ index 0000000..905cfa6
 +
 +/**
 + * @brief builds the suffix array of a text with 40-bit entries
-+ * @tparam sym_t symbol type (an unsigned integer type, uint40_t or __uint128_t)
++ * @tparam sym_t symbol type (a built-in or packed unsigned integer type, see packed_unsigned, or __uint128_t)
 + * @param T [0..n-1] text; for symbol types other than uint8_t and uint16_t (integer alphabet), each
 + *        symbol must be smaller than libsais40_max_symbol. A text of type uint40_t is modified during
 + *        the construction and restored afterwards (unless an error occurs).
@@ -798,14 +828,14 @@ index 0000000..905cfa6
 +}
 diff --git a/include/libsais40_types.hpp b/include/libsais40_types.hpp
 new file mode 100644
-index 0000000..2d90b02
+index 0000000..2b9d9b6
 --- /dev/null
 +++ b/include/libsais40_types.hpp
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,118 @@
 +/**
 + * @file libsais40_types.hpp
-+ * @brief 40-bit integer types of the arrays of libsais40; they convert implicitly to int64_t/uint64_t,
-+ *        and a value assigned to them is truncated to 40 bits
++ * @brief 40-bit and 48-bit integer types of the arrays of libsais40 and libsais48; they convert implicitly to
++ *        int64_t/uint64_t, and a value assigned to them is truncated to their width
 + */
 +
 +#pragma once
@@ -816,79 +846,106 @@ index 0000000..2d90b02
 +#include <cstring>
 +
 +static_assert(std::endian::native == std::endian::little,
-+    "the 40-bit integer types require a little-endian system");
++    "the 40-bit and 48-bit integer types require a little-endian system");
 +
-+#define SA_INT40_MAX ((int64_t { 1 } << 39) - 1)
-+#define SA_INT40_MIN (-(int64_t { 1 } << 39))
++// the largest and the smallest value of a signed integer of the given number of bytes
++#define SA_PACKED_INT_MAX(bytes) ((int64_t { 1 } << (8 * (bytes) - 1)) - 1)
++#define SA_PACKED_INT_MIN(bytes) (-(int64_t { 1 } << (8 * (bytes) - 1)))
 +
-+// maximum input length of libsais40 (the two most significant bits of a 40-bit entry are used as markers)
-+#define SA_INT40_MAX_N (int64_t { 1 } << 38)
++// maximum input length with entries of the given number of bytes (the two most significant bits of an entry are used
++// as markers)
++#define SA_PACKED_INT_MAX_N(bytes) (int64_t { 1 } << (8 * (bytes) - 2))
 +
-+// reads a 40-bit integer from b[0..4]
-+inline uint64_t sa40_load(const uint8_t* b)
++#define SA_INT40_MAX SA_PACKED_INT_MAX(5)
++#define SA_INT40_MIN SA_PACKED_INT_MIN(5)
++#define SA_INT40_MAX_N SA_PACKED_INT_MAX_N(5)
++
++#define SA_INT48_MAX SA_PACKED_INT_MAX(6)
++#define SA_INT48_MIN SA_PACKED_INT_MIN(6)
++#define SA_INT48_MAX_N SA_PACKED_INT_MAX_N(6)
++
++// reads the little-endian integer b[0..bytes-1] (5 or 6 bytes)
++template <uint8_t bytes>
++inline uint64_t sa_packed_load(const uint8_t* b)
 +{
++    static_assert(bytes == 5 || bytes == 6, "the packed integers of libsais have 5 or 6 bytes");
 +    uint32_t low;
-+    std::memcpy(&low, b, 4);
-+    return uint64_t(low) | (uint64_t(b[4]) << 32);
++    std::memcpy(&low, b, sizeof(uint32_t));
++
++    if constexpr (bytes == 5) {
++        return uint64_t(low) | (uint64_t(b[sizeof(uint32_t)]) << 32);
++    } else {
++        uint16_t high;
++        std::memcpy(&high, b + sizeof(uint32_t), sizeof(uint16_t));
++        return uint64_t(low) | (uint64_t(high) << 32);
++    }
 +}
 +
-+// writes the 40 least significant bits of v to b[0..4]
-+inline void sa40_store(uint8_t* b, uint64_t v)
++// writes the 8 * bytes least significant bits of v to b[0..bytes-1] (5 or 6 bytes)
++template <uint8_t bytes>
++inline void sa_packed_store(uint8_t* b, uint64_t v)
 +{
-+    uint32_t low = uint32_t(v);
-+    std::memcpy(b, &low, 4);
-+    b[4] = uint8_t(v >> 32);
++    static_assert(bytes == 5 || bytes == 6, "the packed integers of libsais have 5 or 6 bytes");
++    const uint32_t low = uint32_t(v);
++    std::memcpy(b, &low, sizeof(uint32_t));
++
++    if constexpr (bytes == 5) {
++        b[sizeof(uint32_t)] = uint8_t(v >> 32);
++    } else {
++        const uint16_t high = uint16_t(v >> 32);
++        std::memcpy(b + sizeof(uint32_t), &high, sizeof(uint16_t));
++    }
 +}
 +
-+// compound assignment operators; they compute with 64 bits and truncate the result to 40 bits
-+#define SA_INT40_OPERATORS(type, value_t)                                                        \
-+    type& operator+=(value_t v) { return assign(value_t(*this) + v); }                           \
-+    type& operator-=(value_t v) { return assign(value_t(*this) - v); }                           \
-+    type& operator*=(value_t v) { return assign(value_t(*this) * v); }                           \
-+    type& operator/=(value_t v) { return assign(value_t(*this) / v); }                           \
-+    type& operator%=(value_t v) { return assign(value_t(*this) % v); }                           \
-+    type& operator|=(value_t v) { return assign(value_t(*this) | v); }                           \
-+    type& operator&=(value_t v) { return assign(value_t(*this) & v); }                           \
-+    type& operator^=(value_t v) { return assign(value_t(*this) ^ v); }                            \
-+    type& operator<<=(int v) { return assign(value_t(*this) << v); }                             \
-+    type& operator>>=(int v) { return assign(value_t(*this) >> v); }                             \
-+    type& operator++() { return *this += 1; }                                                    \
-+    type& operator--() { return *this -= 1; }                                                    \
-+    type operator++(int) { type v = *this; *this += 1; return v; }                               \
-+    type operator--(int) { type v = *this; *this -= 1; return v; }                               \
-+    type& assign(value_t v) { sa40_store(bytes, uint64_t(v)); return *this; }
++/**
++ * @brief an integer of `bytes` bytes (entry type of the suffix array and the buckets of libsais40 and libsais48); the
++ *        compound assignment operators compute with 64 bits and truncate the result to 8 * bytes bits
++ * @tparam bytes 5 or 6
++ * @tparam value_t int64_t (signed) or uint64_t (unsigned)
++ */
++template <uint8_t bytes, typename value_t>
++struct sa_packed_int {
++    uint8_t data[bytes];
 +
-+/** @brief signed 40-bit integer (entry type of the suffix array and the buckets of libsais40) */
-+struct sa_int40_t {
-+    uint8_t bytes[5];
++    sa_packed_int() = default;
++    sa_packed_int(value_t v) { sa_packed_store<bytes>(data, uint64_t(v)); }
 +
-+    sa_int40_t() = default;
-+    sa_int40_t(int64_t v) { sa40_store(bytes, uint64_t(v)); }
++    // returns the value (sign-extended from bit 8 * bytes - 1, if value_t is signed)
++    operator value_t() const
++    {
++        constexpr uint8_t unused_bits = 8 * (sizeof(uint64_t) - bytes);
++        if constexpr (value_t(-1) < value_t(0)) return (int64_t(sa_packed_load<bytes>(data)) << unused_bits) >> unused_bits;
++        else return sa_packed_load<bytes>(data);
++    }
 +
-+    // returns the value sign-extended from bit 39
-+    operator int64_t() const { return (int64_t(sa40_load(bytes)) << 24) >> 24; }
-+
-+    SA_INT40_OPERATORS(sa_int40_t, int64_t)
++    sa_packed_int& operator+=(value_t v) { return assign(value_t(*this) + v); }
++    sa_packed_int& operator-=(value_t v) { return assign(value_t(*this) - v); }
++    sa_packed_int& operator*=(value_t v) { return assign(value_t(*this) * v); }
++    sa_packed_int& operator/=(value_t v) { return assign(value_t(*this) / v); }
++    sa_packed_int& operator%=(value_t v) { return assign(value_t(*this) % v); }
++    sa_packed_int& operator|=(value_t v) { return assign(value_t(*this) | v); }
++    sa_packed_int& operator&=(value_t v) { return assign(value_t(*this) & v); }
++    sa_packed_int& operator^=(value_t v) { return assign(value_t(*this) ^ v); }
++    sa_packed_int& operator<<=(int v) { return assign(value_t(*this) << v); }
++    sa_packed_int& operator>>=(int v) { return assign(value_t(*this) >> v); }
++    sa_packed_int& operator++() { return *this += 1; }
++    sa_packed_int& operator--() { return *this -= 1; }
++    sa_packed_int operator++(int) { sa_packed_int v = *this; *this += 1; return v; }
++    sa_packed_int operator--(int) { sa_packed_int v = *this; *this -= 1; return v; }
++    sa_packed_int& assign(value_t v) { sa_packed_store<bytes>(data, uint64_t(v)); return *this; }
 +};
 +
-+/** @brief unsigned 40-bit integer */
-+struct sa_uint40_t {
-+    uint8_t bytes[5];
-+
-+    sa_uint40_t() = default;
-+    sa_uint40_t(uint64_t v) { sa40_store(bytes, v); }
-+
-+    operator uint64_t() const { return sa40_load(bytes); }
-+
-+    SA_INT40_OPERATORS(sa_uint40_t, uint64_t)
-+};
-+
-+#undef SA_INT40_OPERATORS
++using sa_int40_t = sa_packed_int<5, int64_t>; // signed 40-bit integer
++using sa_uint40_t = sa_packed_int<5, uint64_t>; // unsigned 40-bit integer
++using sa_int48_t = sa_packed_int<6, int64_t>; // signed 48-bit integer
++using sa_uint48_t = sa_packed_int<6, uint64_t>; // unsigned 48-bit integer
 +
 +static_assert(sizeof(sa_int40_t) == 5 && alignof(sa_int40_t) == 1);
 +static_assert(sizeof(sa_uint40_t) == 5 && alignof(sa_uint40_t) == 1);
++static_assert(sizeof(sa_int48_t) == 6 && alignof(sa_int48_t) == 1);
++static_assert(sizeof(sa_uint48_t) == 6 && alignof(sa_uint48_t) == 1);
 +
-+// rounds an index of an array of 40-bit integers up to a multiple of alignment (a power of two)
++// rounds an index of an array of packed integers up to a multiple of alignment (a power of two)
 +inline int64_t sa40_align_index(int64_t index, int64_t alignment)
 +{
 +    return (index + alignment - 1) & -alignment;
@@ -8880,10 +8937,10 @@ index 0000000..a316dd9
 +} // namespace libsais16x40_impl
 diff --git a/src/libsais40.cpp b/src/libsais40.cpp
 new file mode 100644
-index 0000000..f830df6
+index 0000000..8402e79
 --- /dev/null
 +++ b/src/libsais40.cpp
-@@ -0,0 +1,8273 @@
+@@ -0,0 +1,8306 @@
 +/*
 +
 +This file is a part of libsais, a library for linear time suffix array,
@@ -8921,16 +8978,49 @@ index 0000000..f830df6
 +    #define UNUSED(_x)                  (void)(_x)
 +#endif
 +
-+namespace libsais40_impl {
++/* the number of bytes of an entry: 5 (libsais40, the default) or 6 (libsais48: this file compiled with
++   LIBSAIS_PACKED_BYTES=6, with the functions declared in libsais40.h named libsais48*) */
++#if !defined(LIBSAIS_PACKED_BYTES)
++    #define LIBSAIS_PACKED_BYTES        5
++#endif
 +
-+typedef sa_int40_t                      sa_sint_t;
-+typedef sa_uint40_t                     sa_uint_t;
++#if LIBSAIS_PACKED_BYTES == 5
++namespace libsais40_impl {
++#elif LIBSAIS_PACKED_BYTES == 6
++    #define libsais40                   libsais48
++    #define libsais40_gsa               libsais48_gsa
++    #define libsais40_long              libsais48_long
++    #define libsais40_omp               libsais48_omp
++    #define libsais40_gsa_omp           libsais48_gsa_omp
++    #define libsais40_long_omp          libsais48_long_omp
++    #define libsais40_bwt               libsais48_bwt
++    #define libsais40_bwt_aux           libsais48_bwt_aux
++    #define libsais40_bwt_omp           libsais48_bwt_omp
++    #define libsais40_bwt_aux_omp       libsais48_bwt_aux_omp
++    #define libsais40_unbwt             libsais48_unbwt
++    #define libsais40_unbwt_aux         libsais48_unbwt_aux
++    #define libsais40_unbwt_omp         libsais48_unbwt_omp
++    #define libsais40_unbwt_aux_omp     libsais48_unbwt_aux_omp
++    #define libsais40_plcp              libsais48_plcp
++    #define libsais40_plcp_int          libsais48_plcp_int
++    #define libsais40_plcp_gsa          libsais48_plcp_gsa
++    #define libsais40_lcp               libsais48_lcp
++    #define libsais40_plcp_omp          libsais48_plcp_omp
++    #define libsais40_plcp_gsa_omp      libsais48_plcp_gsa_omp
++    #define libsais40_lcp_omp           libsais48_lcp_omp
++namespace libsais48_impl {
++#else
++    #error "LIBSAIS_PACKED_BYTES must be 5 or 6"
++#endif
++
++typedef sa_packed_int<LIBSAIS_PACKED_BYTES, int64_t> sa_sint_t;
++typedef sa_packed_int<LIBSAIS_PACKED_BYTES, uint64_t> sa_uint_t;
 +typedef int64_t                         fast_sint_t;
 +typedef uint64_t                        fast_uint_t;
 +
-+#define SAINT_BIT                       (40)
-+#define SAINT_MAX                       SA_INT40_MAX
-+#define SAINT_MIN                       SA_INT40_MIN
++#define SAINT_BIT                       (8 * LIBSAIS_PACKED_BYTES)
++#define SAINT_MAX                       SA_PACKED_INT_MAX(LIBSAIS_PACKED_BYTES)
++#define SAINT_MIN                       SA_PACKED_INT_MIN(LIBSAIS_PACKED_BYTES)
 +
 +#define ALPHABET_SIZE                   (1 << CHAR_BIT)
 +#define UNBWT_FASTBITS                  (17)
@@ -15854,7 +15944,7 @@ index 0000000..f830df6
 +    }
 +}
 +
-+int64_t libsais40(const uint8_t * T, sa_int40_t * SA, int64_t n, int64_t fs, sa_int40_t * freq)
++int64_t libsais40(const uint8_t * T, sa_sint_t *SA, int64_t n, int64_t fs, sa_sint_t *freq)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (fs < 0))
 +    {
@@ -15870,7 +15960,7 @@ index 0000000..f830df6
 +    return libsais40_main(T, SA, n, LIBSAIS_FLAGS_NONE, 0, NULL, fs, freq, 1);
 +}
 +
-+int64_t libsais40_gsa(const uint8_t * T, sa_int40_t * SA, int64_t n, int64_t fs, sa_int40_t * freq)
++int64_t libsais40_gsa(const uint8_t * T, sa_sint_t *SA, int64_t n, int64_t fs, sa_sint_t *freq)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (n > 0 && T[n - 1] != 0) || (fs < 0))
 +    {
@@ -15886,7 +15976,7 @@ index 0000000..f830df6
 +    return libsais40_main(T, SA, n, LIBSAIS_FLAGS_GSA, 0, NULL, fs, freq, 1);
 +}
 +
-+int64_t libsais40_long(sa_int40_t * T, sa_int40_t * SA, int64_t n, int64_t k, int64_t fs)
++int64_t libsais40_long(sa_sint_t *T, sa_sint_t *SA, int64_t n, int64_t k, int64_t fs)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (fs < 0))
 +    {
@@ -15901,7 +15991,7 @@ index 0000000..f830df6
 +    return libsais40_main_long(T, SA, n, k, fs, 1);
 +}
 +
-+int64_t libsais40_bwt(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, int64_t fs, sa_int40_t * freq)
++int64_t libsais40_bwt(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, int64_t fs, sa_sint_t *freq)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || (fs < 0))
 +    { 
@@ -15927,7 +16017,7 @@ index 0000000..f830df6
 +    return index;
 +}
 +
-+int64_t libsais40_bwt_aux(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, int64_t fs, sa_int40_t * freq, int64_t r, sa_int40_t * I)
++int64_t libsais40_bwt_aux(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, int64_t fs, sa_sint_t *freq, int64_t r, sa_sint_t *I)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || (fs < 0) || (r < 2) || ((r & (r - 1)) != 0) || (I == NULL))
 +    { 
@@ -15954,7 +16044,7 @@ index 0000000..f830df6
 +
 +#if defined(LIBSAIS_OPENMP)
 +
-+int64_t libsais40_omp(const uint8_t * T, sa_int40_t * SA, int64_t n, int64_t fs, sa_int40_t * freq, int64_t threads)
++int64_t libsais40_omp(const uint8_t * T, sa_sint_t *SA, int64_t n, int64_t fs, sa_sint_t *freq, int64_t threads)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (fs < 0) || (threads < 0))
 +    {
@@ -15973,7 +16063,7 @@ index 0000000..f830df6
 +    return libsais40_main(T, SA, n, LIBSAIS_FLAGS_NONE, 0, NULL, fs, freq, threads);
 +}
 +
-+int64_t libsais40_gsa_omp(const uint8_t * T, sa_int40_t * SA, int64_t n, int64_t fs, sa_int40_t * freq, int64_t threads)
++int64_t libsais40_gsa_omp(const uint8_t * T, sa_sint_t *SA, int64_t n, int64_t fs, sa_sint_t *freq, int64_t threads)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (n > 0 && T[n - 1] != 0) || (fs < 0) || (threads < 0))
 +    {
@@ -15992,7 +16082,7 @@ index 0000000..f830df6
 +    return libsais40_main(T, SA, n, LIBSAIS_FLAGS_GSA, 0, NULL, fs, freq, threads);
 +}
 +
-+int64_t libsais40_long_omp(sa_int40_t * T, sa_int40_t * SA, int64_t n, int64_t k, int64_t fs, int64_t threads)
++int64_t libsais40_long_omp(sa_sint_t *T, sa_sint_t *SA, int64_t n, int64_t k, int64_t fs, int64_t threads)
 +{
 +    if ((T == NULL) || (SA == NULL) || (n < 0) || (fs < 0) || (threads < 0))
 +    {
@@ -16010,7 +16100,7 @@ index 0000000..f830df6
 +    return libsais40_main_long(T, SA, n, k, fs, threads);
 +}
 +
-+int64_t libsais40_bwt_omp(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, int64_t fs, sa_int40_t * freq, int64_t threads)
++int64_t libsais40_bwt_omp(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, int64_t fs, sa_sint_t *freq, int64_t threads)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || (fs < 0) || (threads < 0))
 +    {
@@ -16039,7 +16129,7 @@ index 0000000..f830df6
 +    return index;
 +}
 +
-+int64_t libsais40_bwt_aux_omp(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, int64_t fs, sa_int40_t * freq, int64_t r, sa_int40_t * I, int64_t threads)
++int64_t libsais40_bwt_aux_omp(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, int64_t fs, sa_sint_t *freq, int64_t r, sa_sint_t *I, int64_t threads)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || (fs < 0) || (r < 2) || ((r & (r - 1)) != 0) || (I == NULL) || (threads < 0))
 +    {
@@ -16720,12 +16810,12 @@ index 0000000..f830df6
 +    return index;
 +}
 +
-+int64_t libsais40_unbwt(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, const sa_int40_t * freq, int64_t i)
++int64_t libsais40_unbwt(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, const sa_sint_t *freq, int64_t i)
 +{
-+    sa_int40_t I = i; return libsais40_unbwt_aux(T, U, A, n, freq, n, &I);
++    sa_sint_t I = i; return libsais40_unbwt_aux(T, U, A, n, freq, n, &I);
 +}
 +
-+int64_t libsais40_unbwt_aux(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, const sa_int40_t * freq, int64_t r, const sa_int40_t * I)
++int64_t libsais40_unbwt_aux(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, const sa_sint_t *freq, int64_t r, const sa_sint_t *I)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || ((r != n) && ((r < 2) || ((r & (r - 1)) != 0))) || (I == NULL))
 +    {
@@ -16745,12 +16835,12 @@ index 0000000..f830df6
 +
 +#if defined(LIBSAIS_OPENMP)
 +
-+int64_t libsais40_unbwt_omp(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, const sa_int40_t * freq, int64_t i, int64_t threads)
++int64_t libsais40_unbwt_omp(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, const sa_sint_t *freq, int64_t i, int64_t threads)
 +{
-+    sa_int40_t I = i; return libsais40_unbwt_aux_omp(T, U, A, n, freq, n, &I, threads);
++    sa_sint_t I = i; return libsais40_unbwt_aux_omp(T, U, A, n, freq, n, &I, threads);
 +}
 +
-+int64_t libsais40_unbwt_aux_omp(const uint8_t * T, uint8_t * U, sa_int40_t * A, int64_t n, const sa_int40_t * freq, int64_t r, const sa_int40_t * I, int64_t threads)
++int64_t libsais40_unbwt_aux_omp(const uint8_t * T, uint8_t * U, sa_sint_t *A, int64_t n, const sa_sint_t *freq, int64_t r, const sa_sint_t *I, int64_t threads)
 +{
 +    if ((T == NULL) || (U == NULL) || (A == NULL) || (n < 0) || ((r != n) && ((r < 2) || ((r & (r - 1)) != 0))) || (I == NULL) || (threads < 0))
 +    {
@@ -17020,7 +17110,7 @@ index 0000000..f830df6
 +    }
 +}
 +
-+int64_t libsais40_plcp(const uint8_t * T, const sa_int40_t * SA, sa_int40_t * PLCP, int64_t n)
++int64_t libsais40_plcp(const uint8_t * T, const sa_sint_t *SA, sa_sint_t *PLCP, int64_t n)
 +{
 +    if ((T == NULL) || (SA == NULL) || (PLCP == NULL) || (n < 0))
 +    {
@@ -17038,7 +17128,7 @@ index 0000000..f830df6
 +    return 0;
 +}
 +
-+int64_t libsais40_plcp_int(const sa_int40_t * T, const sa_int40_t * SA, sa_int40_t * PLCP, int64_t n) {
++int64_t libsais40_plcp_int(const sa_sint_t *T, const sa_sint_t *SA, sa_sint_t *PLCP, int64_t n) {
 +    if ((T == NULL) || (SA == NULL) || (PLCP == NULL) || (n < 0))
 +    {
 +        return -1;
@@ -17055,7 +17145,7 @@ index 0000000..f830df6
 +    return 0;
 +}
 +
-+int64_t libsais40_plcp_gsa(const uint8_t * T, const sa_int40_t * SA, sa_int40_t * PLCP, int64_t n)
++int64_t libsais40_plcp_gsa(const uint8_t * T, const sa_sint_t *SA, sa_sint_t *PLCP, int64_t n)
 +{
 +    if ((T == NULL) || (SA == NULL) || (PLCP == NULL) || (n < 0) || (n > 0 && T[n - 1] != 0))
 +    {
@@ -17073,7 +17163,7 @@ index 0000000..f830df6
 +    return 0;
 +}
 +
-+int64_t libsais40_lcp(const sa_int40_t * PLCP, const sa_int40_t * SA, sa_int40_t * LCP, int64_t n)
++int64_t libsais40_lcp(const sa_sint_t *PLCP, const sa_sint_t *SA, sa_sint_t *LCP, int64_t n)
 +{
 +    if ((PLCP == NULL) || (SA == NULL) || (LCP == NULL) || (n < 0))
 +    {
@@ -17092,7 +17182,7 @@ index 0000000..f830df6
 +
 +#if defined(LIBSAIS_OPENMP)
 +
-+int64_t libsais40_plcp_omp(const uint8_t * T, const sa_int40_t * SA, sa_int40_t * PLCP, int64_t n, int64_t threads)
++int64_t libsais40_plcp_omp(const uint8_t * T, const sa_sint_t *SA, sa_sint_t *PLCP, int64_t n, int64_t threads)
 +{
 +    if ((T == NULL) || (SA == NULL) || (PLCP == NULL) || (n < 0) || (threads < 0))
 +    {
@@ -17113,7 +17203,7 @@ index 0000000..f830df6
 +    return 0;
 +}
 +
-+int64_t libsais40_plcp_gsa_omp(const uint8_t * T, const sa_int40_t * SA, sa_int40_t * PLCP, int64_t n, int64_t threads)
++int64_t libsais40_plcp_gsa_omp(const uint8_t * T, const sa_sint_t *SA, sa_sint_t *PLCP, int64_t n, int64_t threads)
 +{
 +    if ((T == NULL) || (SA == NULL) || (PLCP == NULL) || (n < 0) || (n > 0 && T[n - 1] != 0) || (threads < 0))
 +    {
@@ -17134,7 +17224,7 @@ index 0000000..f830df6
 +    return 0;
 +}
 +
-+int64_t libsais40_lcp_omp(const sa_int40_t * PLCP, const sa_int40_t * SA, sa_int40_t * LCP, int64_t n, int64_t threads)
++int64_t libsais40_lcp_omp(const sa_sint_t *PLCP, const sa_sint_t *SA, sa_sint_t *LCP, int64_t n, int64_t threads)
 +{
 +    if ((PLCP == NULL) || (SA == NULL) || (LCP == NULL) || (n < 0) || (threads < 0))
 +    {
@@ -17156,7 +17246,7 @@ index 0000000..f830df6
 +
 +#endif
 +
-+} // namespace libsais40_impl
++} // namespace libsais40_impl or libsais48_impl
 diff --git a/src/libsais64.c b/src/libsais64.c
 index 74fc1cb..041f94a 100644
 --- a/src/libsais64.c

@@ -144,7 +144,7 @@ string_utils_silence_warnings(sdsl_core ips4o ips2ra sux malloc_count)
 if(PROJECT_IS_TOP_LEVEL)
   string_utils_add_components(sdsl libsais gtl emhash tests)
   add_custom_target(string_utils_libraries ALL)
-  add_dependencies(string_utils_libraries sdsl_core sdsl libsais libsais40 divsufsort divsufsort64)
+  add_dependencies(string_utils_libraries sdsl_core sdsl libsais libsais40 libsais48 divsufsort divsufsort64)
 
   if(TARGET string_utils_sort)
     add_dependencies(string_utils_libraries string_utils_sort)

@@ -358,7 +358,7 @@ public:
         delete_blocks((_size + block_length - 1) >> log_block_length, num_blocks_in_table());
     }
 
-    // returns the size of the allocated blocks and the table in bytes
+    // returns the size in bytes
     uint64_t size_in_bytes() const
     {
         uint64_t num_allocated_blocks = 0;
