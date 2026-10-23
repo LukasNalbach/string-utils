@@ -221,8 +221,14 @@ public:
     // returns the size of the bit vector and its supports in bytes
     uint64_t size_in_bytes() const
     {
-        return sdsl::size_in_bytes(_vec) + sdsl::size_in_bytes(_rank_1_support) +
-            _select_0_support.size_in_bytes() + _select_1_support.size_in_bytes();
+        uint64_t bytes = sdsl::size_in_bytes(_vec);
+        auto add_array = [&bytes](void*, uint64_t array_bytes) { bytes += array_bytes; };
+
+        if (has_rank_support()) bytes += sdsl::size_in_bytes(_rank_1_support);
+        _select_0_support.for_each_backing_array(add_array);
+        _select_1_support.for_each_backing_array(add_array);
+
+        return bytes;
     }
 
     // ############################# ACCESS METHODS #############################

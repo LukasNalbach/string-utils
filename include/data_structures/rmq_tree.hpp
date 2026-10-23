@@ -183,7 +183,7 @@ public:
     // returns the size of the tree in bytes
     uint64_t size_in_bytes() const
     {
-        return sizeof(*this) - sizeof(data) + data.size_in_bytes() + sizeof(uint64_t) * (lvl_beg.size() + lvl_len.size());
+        return sizeof(uint64_t) * (lvl_beg.size() + lvl_len.size()) + data.size_in_bytes();
     }
 
     // ############################# ACCESS METHODS #############################

@@ -197,7 +197,12 @@ public:
     inline uint64_t num_zeros() const { return _size - _num_ones; }
 
     // returns the size of the data structure in bytes
-    uint64_t size_in_bytes() const { return sizeof(*this) + (_num_ones == 0 ? 0 : _ef.bitCount() / 8); }
+    uint64_t size_in_bytes() const
+    {
+        uint64_t bytes = 0;
+        _ef.for_each_backing_array([&bytes](void*, uint64_t array_bytes) { bytes += array_bytes; });
+        return bytes;
+    }
 
     // ############################# ACCESS METHODS #############################
 

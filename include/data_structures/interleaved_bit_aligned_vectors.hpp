@@ -155,7 +155,7 @@ public:
     inline bool empty() const { return size_vectors == 0; }
 
     // returns the size of the data structure in bytes
-    uint64_t size_in_bytes() const { return sizeof(*this) + byte_size(size_vectors); }
+    uint64_t size_in_bytes() const { return byte_size(size_vectors); }
 
     // returns the number of bits per entry (the sum of the widths of all vectors)
     inline uint64_t bits_per_entry() const { return width_entry; }
