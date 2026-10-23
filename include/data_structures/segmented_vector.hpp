@@ -367,8 +367,7 @@ public:
             if (block_ptr(block) != nullptr) num_allocated_blocks++;
         }
 
-        const uint64_t table_entries = has_many_writers ? num_blocks_in_table() : block_ptrs.capacity();
-        return sizeof(*this) + num_allocated_blocks * block_length * sizeof(val_t) + table_entries * sizeof(val_t*);
+        return num_allocated_blocks * block_length * sizeof(val_t) + num_blocks_in_table() * sizeof(val_t*);
     }
 
     // ############################# ACCESS METHODS #############################
