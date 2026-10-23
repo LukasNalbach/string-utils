@@ -208,6 +208,9 @@ inline std::string format_size(uint64_t B)
 inline uint64_t listing_total = 0;
 // sum of the sizes in bytes of the components listed with log_component at depth 0 since begin_listing
 inline uint64_t listing_listed = 0;
+// number of levels by which log_component indents the components in addition to their depth (e.g. 1 for the
+// components listed under a heading)
+inline uint64_t listing_indent = 0;
 
 /**
  * @brief formats a size and, if listing_total is set, its share of listing_total
@@ -241,14 +244,14 @@ inline bool begin_listing(uint64_t total)
 
 /**
  * @brief logs the size of a component of the data structure whose sizes are being listed, with its share of
- *        listing_total: "<name>: <size> (<share> %)", indented by two spaces per depth
+ *        listing_total: "<name>: <size> (<share> %)", indented by two spaces per depth (plus listing_indent)
  * @param name the name of the component
  * @param bytes its size in bytes
  * @param depth 0 for a component of the data structure, 1 for a part of a component of depth 0, ...
  */
 inline void log_component(const std::string& name, uint64_t bytes, uint64_t depth = 0)
 {
-    log_out() << std::string(2 * depth, ' ') << name << ": " << format_share(bytes) << '\n';
+    log_out() << std::string(2 * (depth + listing_indent), ' ') << name << ": " << format_share(bytes) << '\n';
     if (depth == 0) listing_listed += bytes;
 }
 
@@ -256,6 +259,7 @@ inline void log_component(const std::string& name, uint64_t bytes, uint64_t dept
 inline void end_listing()
 {
     if (listing_total > listing_listed) log_component("other", listing_total - listing_listed);
+    listing_indent = 0;
     log_out() << std::flush;
     listing_total = 0;
     listing_listed = 0;
