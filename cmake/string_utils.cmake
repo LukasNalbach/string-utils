@@ -184,14 +184,16 @@ endfunction()
 # string_utils_apply_patches(<project dir>)
 #
 # applies each patch <project dir>/patches/<path below external/>.patch (written by patches/make-patch.sh
-# of string-utils) to its submodule; a patch that has already been applied is skipped, and a patch that cannot
-# be applied is skipped with a warning
+# of string-utils) to its submodule; a patch that has already been applied is skipped; if an earlier version of the
+# patch (from the git history of the patch file) is applied, it is reverted first; a patch that cannot be applied is
+# skipped with a warning
 function(string_utils_apply_patches project_dir)
   file(GLOB_RECURSE patches RELATIVE "${project_dir}/patches" "${project_dir}/patches/*.patch")
 
   foreach(patch IN LISTS patches)
     string(REGEX REPLACE "\\.patch$" "" submodule "${patch}")
     set(submodule_dir "${project_dir}/external/${submodule}")
+    set(patch_file "${project_dir}/patches/${patch}")
     file(GLOB contents "${submodule_dir}/*")
 
     # skip submodules that have not been downloaded
@@ -200,20 +202,158 @@ function(string_utils_apply_patches project_dir)
     endif()
 
     execute_process(
-      COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${project_dir}/patches/${patch}"
+      COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch_file}"
       WORKING_DIRECTORY "${submodule_dir}" RESULT_VARIABLE not_applied OUTPUT_QUIET ERROR_QUIET)
 
-    if(not_applied)
+    if(NOT not_applied)
+      continue()
+    endif()
+
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" log --format=%H -- "patches/${patch}"
+      WORKING_DIRECTORY "${project_dir}" OUTPUT_VARIABLE versions OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    string(REPLACE "\n" ";" versions "${versions}")
+    string(MAKE_C_IDENTIFIER "${patch}" patch_id)
+    set(earlier_patch_file "${CMAKE_BINARY_DIR}/string_utils_patches/${patch_id}.patch")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/string_utils_patches")
+
+    foreach(version IN LISTS versions)
       execute_process(
-        COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${project_dir}/patches/${patch}"
-        WORKING_DIRECTORY "${submodule_dir}" RESULT_VARIABLE failed OUTPUT_QUIET ERROR_VARIABLE error)
+        COMMAND "${GIT_EXECUTABLE}" show "${version}:./patches/${patch}"
+        WORKING_DIRECTORY "${project_dir}" OUTPUT_FILE "${earlier_patch_file}" RESULT_VARIABLE failed ERROR_QUIET)
 
       if(failed)
-        message(WARNING "patches/${patch} cannot be applied to external/${submodule} and has not been "
-          "applied yet; the submodule is left unchanged (update the patch with make-patch.sh of "
-          "string-utils):\n${error}")
+        continue()
+      endif()
+
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${earlier_patch_file}"
+        WORKING_DIRECTORY "${submodule_dir}" RESULT_VARIABLE not_applied OUTPUT_QUIET ERROR_QUIET)
+
+      if(NOT not_applied)
+        execute_process(
+          COMMAND "${GIT_EXECUTABLE}" apply --reverse "${earlier_patch_file}"
+          WORKING_DIRECTORY "${submodule_dir}" OUTPUT_QUIET ERROR_QUIET)
+        message(STATUS "Reverted the version of patches/${patch} of commit ${version} in external/${submodule}")
+        break()
+      endif()
+    endforeach()
+
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" apply --whitespace=nowarn "${patch_file}"
+      WORKING_DIRECTORY "${submodule_dir}" RESULT_VARIABLE failed OUTPUT_QUIET ERROR_VARIABLE error)
+
+    if(failed)
+      message(WARNING "patches/${patch} cannot be applied to external/${submodule} and has not been "
+        "applied yet; the submodule is left unchanged (update the patch with make-patch.sh of "
+        "string-utils):\n${error}")
+    endif()
+  endforeach()
+endfunction()
+
+# string_utils_sync_submodules(<repository dir>)
+#
+# checks the checked-out submodules of the repository and, recursively, of its submodules against the commits their
+# parents pin: a submodule without changes whose commit is an ancestor of the pinned one is moved to the pinned commit,
+# any other submodule that is not at its pinned commit is reported with a warning; stops the configuration if it
+# moved the string-utils that is running, since its CMake files have already been read
+function(string_utils_sync_submodules repo_dir)
+  set_property(GLOBAL PROPERTY STRING_UTILS_MOVED_ITSELF FALSE)
+  string_utils_sync_submodules_of("${repo_dir}")
+  get_property(moved_itself GLOBAL PROPERTY STRING_UTILS_MOVED_ITSELF)
+
+  if(moved_itself)
+    message(FATAL_ERROR "string-utils has been moved to its pinned commit; run CMake again")
+  endif()
+endfunction()
+
+# string_utils_sync_submodules_of(<repository dir>): see string_utils_sync_submodules
+function(string_utils_sync_submodules_of repo_dir)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" submodule status
+    WORKING_DIRECTORY "${repo_dir}" OUTPUT_VARIABLE status RESULT_VARIABLE failed ERROR_QUIET)
+
+  if(failed)
+    return()
+  endif()
+
+  get_filename_component(own_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." REALPATH)
+  string(REPLACE "\n" ";" lines "${status}")
+
+  foreach(line IN LISTS lines)
+    if(NOT line MATCHES "^([ +U-])([0-9a-f]+) ([^ ]+)")
+      continue()
+    endif()
+
+    set(state "${CMAKE_MATCH_1}")
+    set(head "${CMAKE_MATCH_2}")
+    set(path "${CMAKE_MATCH_3}")
+    set(sub_dir "${repo_dir}/${path}")
+    file(RELATIVE_PATH name "${CMAKE_SOURCE_DIR}" "${sub_dir}")
+
+    # skip submodules that have not been downloaded
+    if(state STREQUAL "-")
+      continue()
+    endif()
+
+    if(NOT state STREQUAL " ")
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" ls-files --stage -- "${path}"
+        WORKING_DIRECTORY "${repo_dir}" OUTPUT_VARIABLE entry ERROR_QUIET)
+      string(REGEX REPLACE "^[0-9]+ ([0-9a-f]+) .*$" "\\1" pinned "${entry}")
+      string(STRIP "${pinned}" pinned)
+
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" cat-file -e "${pinned}^{commit}"
+        WORKING_DIRECTORY "${sub_dir}" RESULT_VARIABLE missing OUTPUT_QUIET ERROR_QUIET)
+
+      if(missing)
+        execute_process(
+          COMMAND "${GIT_EXECUTABLE}" fetch -q origin
+          WORKING_DIRECTORY "${sub_dir}" OUTPUT_QUIET ERROR_QUIET)
+      endif()
+
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" merge-base --is-ancestor "${head}" "${pinned}"
+        WORKING_DIRECTORY "${sub_dir}" RESULT_VARIABLE not_behind OUTPUT_QUIET ERROR_QUIET)
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" status --porcelain --ignore-submodules=all
+        WORKING_DIRECTORY "${sub_dir}" OUTPUT_VARIABLE changes ERROR_QUIET)
+      string(SUBSTRING "${head}" 0 7 head_short)
+      string(SUBSTRING "${pinned}" 0 7 pinned_short)
+
+      if(NOT not_behind AND changes STREQUAL "")
+        execute_process(
+          COMMAND "${GIT_EXECUTABLE}" checkout -q "${pinned}"
+          WORKING_DIRECTORY "${sub_dir}" RESULT_VARIABLE failed ERROR_QUIET)
+
+        if(NOT failed)
+          message(STATUS "Moved ${name} from ${head_short} to its pinned commit ${pinned_short}")
+          get_filename_component(sub_real "${sub_dir}" REALPATH)
+
+          if(sub_real STREQUAL own_dir)
+            set_property(GLOBAL PROPERTY STRING_UTILS_MOVED_ITSELF TRUE)
+          endif()
+        endif()
+      else()
+        execute_process(
+          COMMAND "${GIT_EXECUTABLE}" merge-base --is-ancestor "${pinned}" "${head}"
+          WORKING_DIRECTORY "${sub_dir}" RESULT_VARIABLE not_ahead OUTPUT_QUIET ERROR_QUIET)
+
+        if(NOT not_behind)
+          set(relation "behind it, with uncommitted changes")
+        elseif(NOT not_ahead)
+          set(relation "ahead of it")
+        else()
+          set(relation "diverged from it")
+        endif()
+
+        message(WARNING "${name} is at ${head_short}, ${relation}, not at its pinned commit ${pinned_short}; "
+          "git submodule update --init --recursive moves it there")
       endif()
     endif()
+
+    string_utils_sync_submodules_of("${sub_dir}")
   endforeach()
 endfunction()
 
