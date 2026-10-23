@@ -555,8 +555,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
         num_symbols += length;
     }
 
-    log_phase_start(cli.log, time, "extracting " + format_size(num_symbols)
-        + (restores_fasta ? " and restoring the FASTA file" : ""));
+    log_phase_start(cli.log, time, "extracting " + format_size(num_symbols));
     phase_progress progress(cli.log, num_symbols);
 
     if (restores_fasta) {

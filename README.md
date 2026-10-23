@@ -18,7 +18,7 @@ This repository contains C++20 headers, data structures, CMake functions and tes
 - [include/fasta/](include/fasta/) — FASTA files as texts: the transformation of the bytes of a FASTA file into the symbols of a text, the parallel scan with samples of the text and a reader of the text that starts at the samples (`scan`); the split of a FASTA file into its header lines and its line layout, coded with context models (`header_model`, `layout_model`), and its sequence text (`split`), and the restoration of the file (`restore`), see [FASTA Files](#fasta-files).
 - [include/data_structures/](include/data_structures/) — a plain and an Elias-Fano coded bit vector with rank and select support, interleaved bit-aligned vectors, a range minimum query tree and a segmented vector.
 - [tests/](tests/) — test helpers: random inputs within a time or iteration budget (`test-fuzz.hpp`), test inputs (`test-inputs.hpp`) and reference implementations of the suffix array, the LCP array and range minimum queries (`test-references.hpp`).
-- [external/](external/) — the submodules [sdsl-lite](https://github.com/simongog/sdsl-lite), [sux](https://github.com/vigna/sux), [malloc_count](https://github.com/ByteHamster-etc/malloc_count), [ips4o](https://github.com/ips4o/ips4o), [ips2ra](https://github.com/ips4o/ips2ra), [libsais](https://github.com/IlyaGrebnov/libsais) (also built as the 40-bit variant `libsais40`), [gtl](https://github.com/greg7mdp/gtl), [emhash](https://github.com/ktprime/emhash) and [googletest](https://github.com/google/googletest), with the patches in [patches/](patches/).
+- [external/](external/) — the submodules [sdsl-lite](https://github.com/simongog/sdsl-lite), [sux](https://github.com/vigna/sux), [malloc_count](https://github.com/ByteHamster-etc/malloc_count), [ips4o](https://github.com/ips4o/ips4o), [ips2ra](https://github.com/ips4o/ips2ra), [libsais](https://github.com/IlyaGrebnov/libsais) (also built as the 40-bit and the 48-bit variants `libsais40` and `libsais48`), [gtl](https://github.com/greg7mdp/gtl), [emhash](https://github.com/ktprime/emhash) and [googletest](https://github.com/google/googletest), with the patches in [patches/](patches/).
 - [cmake/](cmake/) — the build settings (`settings.cmake`) and the CMake functions (`string_utils.cmake`).
 
 The code builds on Linux with GCC or Clang and on Windows with Clang (MSVC ABI) or MinGW-w64.
@@ -59,7 +59,7 @@ With `EXCLUDE_FROM_ALL`, the build compiles only the libraries of string-utils t
 | Component | Targets |
 | --- | --- |
 | `sdsl` | `sdsl`: all of sdsl-lite, with libdivsufsort (`divsufsort`, `divsufsort64`) |
-| `libsais` | `libsais` and its 40-bit variant `libsais40` |
+| `libsais` | `libsais` and its 40-bit and 48-bit variants `libsais40` and `libsais48` |
 | `gtl` | `gtl` |
 | `emhash` | `emhash` |
 | `tests` | `string_utils_test`: the test helpers (`tests/`) with googletest; a test that includes `test-references.hpp` also links `libsais` and `gtl` |

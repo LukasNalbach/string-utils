@@ -218,7 +218,7 @@ public:
     // returns the number of zeros
     inline uint64_t num_zeros() const { return _num_zeros; }
 
-    // returns the size of the bit vector and its supports in bytes
+    // returns the size in bytes
     uint64_t size_in_bytes() const
     {
         uint64_t bytes = sdsl::size_in_bytes(_vec);

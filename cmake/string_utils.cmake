@@ -61,7 +61,7 @@ endfunction()
 # added is skipped):
 #   sdsl      sdsl: all of sdsl-lite (the core has the sources its headers need) with libdivsufsort (divsufsort,
 #             divsufsort64)
-#   libsais   libsais and libsais40 (the 40-bit variant)
+#   libsais   libsais, libsais40 and libsais48 (the 40-bit and the 48-bit variant)
 #   gtl       gtl
 #   emhash    emhash
 #   tests     string_utils_test: the test helpers (tests/) and googletest; a test that includes test-references.hpp
@@ -129,6 +129,14 @@ function(string_utils_add_components)
       target_compile_options(libsais40 PRIVATE -fno-strict-aliasing)
       target_link_libraries(libsais40 PUBLIC OpenMP::OpenMP_CXX)
       set_target_properties(libsais40 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+      # libsais40.cpp with 48-bit integers (libsais48_impl, see libsais40.h)
+      add_library(libsais48 STATIC EXCLUDE_FROM_ALL "${libsais_root}/src/libsais40.cpp")
+      target_include_directories(libsais48 PUBLIC "${libsais_root}/include" "${source_dir}/include")
+      target_compile_definitions(libsais48 PUBLIC LIBSAIS_OPENMP PRIVATE LIBSAIS_PACKED_BYTES=6)
+      target_compile_options(libsais48 PRIVATE -fno-strict-aliasing)
+      target_link_libraries(libsais48 PUBLIC OpenMP::OpenMP_CXX)
+      set_target_properties(libsais48 PROPERTIES POSITION_INDEPENDENT_CODE ON)
       string_utils_mark_system(libsais)
       string_utils_silence_warnings(libsais)
     elseif(component STREQUAL "gtl")
