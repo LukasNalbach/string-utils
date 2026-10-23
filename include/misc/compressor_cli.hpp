@@ -475,9 +475,9 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
     const bool postcompressed = cli.postcompressor != nullptr
         && cli.postcompressor->kind != postcompressor_kind::none;
 
-    log_out() << "decompressing " << cli.path_input_file << " (" << format_size(input_bytes) << ") using "
+    log_out() << "decompressing " << cli.path_input_file << " (" << format_size(input_bytes) << ") with "
               << format_threads(cli.threads) << std::endl;
-    log_out() << "output: " << cli.path_output_file << std::endl << std::endl;
+    log_out() << "output: " << cli.path_output_file << std::endl;
 
     const uint64_t baseline = malloc_count_current();
     malloc_count_reset_peak();
@@ -584,7 +584,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
     const uint64_t time_ns = time_diff_ns(time_start, now());
     const uint64_t peak = overall_peak() - baseline;
 
-    log_out() << std::endl << "decompression time: " << format_time(time_ns) << " ("
+    log_out() << "decompression time: " << format_time(time_ns) << " ("
               << format_throughput(num_symbols, time_ns) << ")" << std::endl;
     if constexpr (is_malloc_count_linked) log_peak_memory_usage("peak memory usage", peak, num_symbols);
 
