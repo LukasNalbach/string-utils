@@ -26,8 +26,8 @@
 
 /**
  * @file extraction.hpp
- * @brief extraction of ranges of the text from a compressed representation of it with random access (e.g. a
- *        grammar or a Lempel-Ziv parsing); used by the decompression of a compressor (see compressor_cli.hpp)
+ * @brief extraction of ranges of the text from a compressed representation of it with random access; used by the
+ *        decompression of a compressor (see compressor_cli.hpp)
  */
 
 #ifndef STRING_UTILS_MISC_EXTRACTION_HPP

@@ -40,7 +40,9 @@
 #include <misc/platform.hpp>
 #include <misc/serialize.hpp>
 #include <misc/utils.hpp>
+#include <array>
 #include <filesystem>
+#include <future>
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
@@ -640,6 +642,79 @@ public:
 };
 
 /**
+ * @brief reads a file in consecutive windows (as fasta_window loads them: a window starts at the last byte of the
+ *        window before it, with the byte before that) through two direct_readers: reading a window starts reading the
+ *        window after it with the other reader in a background thread (std::async)
+ */
+class read_ahead_reader {
+public:
+    // number of bytes a window has at most (see fasta_window)
+    static constexpr uint64_t block = direct_reader::block;
+
+private:
+    std::array<direct_reader, 2> readers; // the reader of the current window and the one that reads ahead
+    uint64_t current = 0; // the index of the reader of the current window
+    std::future<void> ahead; // reads the next window into readers[1 - current] (if valid)
+    uint64_t ahead_beg = 0, ahead_end = 0; // the bytes [ahead_beg, ahead_end) that ahead reads
+
+    // waits for the read ahead and switches to its reader if its bytes contain [beg, end)
+    void finish_ahead(uint64_t beg, uint64_t end)
+    {
+        if (!ahead.valid()) return;
+        ahead.get();
+        if (beg >= ahead_beg && end <= ahead_end) current = 1 - current;
+    }
+
+public:
+    read_ahead_reader() = default;
+    explicit read_ahead_reader(const std::string& path) : readers { direct_reader(path), direct_reader(path) } { }
+    read_ahead_reader(read_ahead_reader&& other) noexcept { *this = std::move(other); }
+
+    // the window that other reads ahead is read again
+    read_ahead_reader& operator=(read_ahead_reader&& other) noexcept
+    {
+        if (ahead.valid()) ahead.wait();
+        if (other.ahead.valid()) other.ahead.wait();
+        readers = std::move(other.readers);
+        current = other.current;
+        ahead = std::future<void>();
+        other.ahead = std::future<void>();
+        return *this;
+    }
+
+    ~read_ahead_reader()
+    {
+        if (ahead.valid()) ahead.wait();
+    }
+
+    // returns the length of the file in bytes
+    uint64_t size() const { return readers[current].size(); }
+
+    /**
+     * @brief reads the bytes [beg, end) of the file and starts reading the window after them, the bytes
+     *        [end - 2, end - 1 + block)
+     * @param beg [0..size()-1] first position of the range
+     * @param end [beg+1..size()] position after the last position of the range
+     * @return pointer to the first byte of the range, valid until the next call of read()
+     */
+    const uint8_t* read(uint64_t beg, uint64_t end)
+    {
+        finish_ahead(beg, end);
+        const uint8_t* bytes = readers[current].read(beg, end);
+        const uint64_t n = size();
+
+        if (end < n) {
+            ahead_beg = end - std::min<uint64_t>(end, 2);
+            ahead_end = std::min(n, end - 1 + block);
+            direct_reader& next = readers[1 - current];
+            ahead = std::async(std::launch::async, [&next, b = ahead_beg, e = ahead_end] { next.read(b, e); });
+        }
+
+        return bytes;
+    }
+};
+
+/**
  * @brief reads ranges of a file in blocks of at most block_bytes bytes, with O_DIRECT or, if the file system does not
  *        support O_DIRECT, through the page cache (then the read pages are dropped from it every drop_interval bytes).
  *        The buffer is allocated with platform::allocate_aligned_counted, which malloc_count counts. Several threads
@@ -803,6 +878,258 @@ public:
 
     // writes the partly written sectors, truncates the file to its length and closes it; returns whether this succeeded
     bool close_file();
+};
+
+// a destination that several threads write bytes to at given offsets, in any order
+class positioned_output {
+public:
+    virtual ~positioned_output() = default;
+
+    /**
+     * @brief writes bytes
+     * @param data the bytes
+     * @param size number of bytes (> 0)
+     * @param offset offset in the destination
+     */
+    virtual void write(const void* data, uint64_t size, uint64_t offset) = 0;
+
+    // completes the destination after the last write
+    virtual void close() = 0;
+};
+
+/**
+ * @brief a file that several threads write to at given offsets, in any order, with O_DIRECT (if the file system does
+ *        not support it, through the page cache). The sectors of a write are written directly; the bytes of a sector
+ *        that the write covers only partly are collected until the sector is complete. close writes the remaining
+ *        sectors padded with zeros and truncates the file to its length.
+ */
+class parallel_output_file : public positioned_output {
+private:
+    static constexpr uint64_t sector = direct_io_alignment;
+    // size in bytes of the aligned buffer of each thread that write copies the complete sectors through
+    static constexpr uint64_t copy_buffer_bytes = 1024 * 1024;
+
+    // a sector that has been written only partly
+    struct partial_sector {
+        uint8_t* bytes; // the sector (aligned to sector), zero where it has not been written
+        uint64_t written; // the number of bytes written
+    };
+
+    std::string path; // path of the file
+    int fd = -1; // file descriptor
+    bool direct = false; // true <=> the file is opened with O_DIRECT
+    uint64_t length = 0; // the length of the file: the largest offset after a written byte
+    std::mutex lock; // protects partial and length
+    std::vector<std::pair<uint64_t, partial_sector>> partial; // the partly written sectors with their indexes
+
+    // writes size bytes from an aligned buffer at an aligned offset
+    void write_aligned(const uint8_t* data, uint64_t size, uint64_t offset)
+    {
+        if (!pwrite_fully(fd, (const char*) data, size, offset))
+            throw std::runtime_error("cannot write " + path);
+    }
+
+    // adds the bytes data[0..end-beg-1] at the offsets [beg, end) to the partly written sectors; writes complete ones
+    void write_partial(const uint8_t* data, uint64_t beg, uint64_t end)
+    {
+        std::lock_guard<std::mutex> guard(lock);
+
+        while (beg < end) {
+            const uint64_t index = beg / sector;
+            const uint64_t num = std::min(end, (index + 1) * sector) - beg;
+            auto it = std::find_if(partial.begin(), partial.end(), [&](const auto& e) { return e.first == index; });
+
+            if (it == partial.end()) {
+                uint8_t* bytes = (uint8_t*) allocate_aligned(sector);
+                std::memset(bytes, 0, sector);
+                partial.emplace_back(index, partial_sector { bytes, 0 });
+                it = partial.end() - 1;
+            }
+
+            std::memcpy(it->second.bytes + (beg - index * sector), data, num);
+            it->second.written += num;
+
+            if (it->second.written == sector) {
+                write_aligned(it->second.bytes, sector, index * sector);
+                platform::free_aligned(it->second.bytes);
+                partial.erase(it);
+            }
+
+            data += num;
+            beg += num;
+        }
+    }
+
+public:
+    // creates (or truncates) the file
+    explicit parallel_output_file(const std::string& path) : path(path)
+    {
+        fd = open_direct_or_buffered(path, platform::file_access::write, direct);
+        if (fd < 0) throw std::runtime_error("cannot write " + path);
+        platform::make_sparse(fd);
+    }
+
+    ~parallel_output_file() override
+    {
+        for (auto& [index, s] : partial) platform::free_aligned(s.bytes);
+        if (fd >= 0) platform::close(fd);
+    }
+
+    parallel_output_file(const parallel_output_file&) = delete;
+    parallel_output_file& operator=(const parallel_output_file&) = delete;
+
+    void write(const void* data, uint64_t size, uint64_t offset) override
+    {
+        const uint8_t* bytes = (const uint8_t*) data;
+        const uint64_t end = offset + size;
+
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            length = std::max(length, end);
+        }
+
+        if (!direct) {
+            write_aligned(bytes, size, offset);
+            return;
+        }
+
+        // [first, last) are the sectors the write covers completely
+        const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
+        const uint64_t last = std::max(first, (end / sector) * sector);
+        if (offset < first) write_partial(bytes, offset, first);
+        if (last < end) write_partial(bytes + (last - offset), last, end);
+        if (first == last) return;
+
+        // the complete sectors are copied to an aligned buffer of each thread
+        static thread_local std::unique_ptr<uint8_t, decltype(&platform::free_aligned)> buffer(
+            (uint8_t*) allocate_aligned(copy_buffer_bytes), &platform::free_aligned);
+
+        for (uint64_t pos = first; pos < last; pos += copy_buffer_bytes) {
+            const uint64_t num = std::min(copy_buffer_bytes, last - pos);
+            std::memcpy(buffer.get(), bytes + (pos - offset), num);
+            write_aligned(buffer.get(), num, pos);
+        }
+    }
+
+    // writes the partly written sectors and truncates the file to its length
+    void close() override
+    {
+        for (auto& [index, s] : partial) {
+            write_aligned(s.bytes, sector, index * sector);
+            platform::free_aligned(s.bytes);
+        }
+
+        partial.clear();
+        if (!platform::set_size(fd, length)) throw std::runtime_error("cannot write " + path);
+        platform::close(fd);
+        fd = -1;
+    }
+};
+
+/**
+ * @brief reads the values of an array stored in a file (a fixed number of bytes per value, little endian), with
+ *        O_DIRECT (if the file system does not support it, through the page cache, whose read pages are dropped); a
+ *        value that is not in the buffer is read together with the values after it, read_bytes bytes at once
+ */
+class array_file_reader {
+private:
+    static constexpr uint64_t sector = direct_io_alignment;
+
+    uint64_t width; // bytes per value
+    uint64_t mask; // the low 8 * width bits
+    uint64_t read_bytes; // number of bytes read at once
+    uint64_t num_values = 0; // number of values in the file
+    uint8_t* buffer = nullptr; // read_bytes + 2 * sector bytes (rounded up to a multiple of sector), aligned to sector
+    int fd = -1; // file descriptor
+    bool direct = false; // true <=> the file is opened with O_DIRECT
+    uint64_t beg = 0, end = 0; // the values [beg, end) are in the buffer
+    const uint8_t* data = nullptr; // the bytes of value beg in the buffer
+
+    // reads the values [i, i + read_bytes / width) into the buffer
+    void read_from(uint64_t i)
+    {
+        beg = i;
+        end = std::min(num_values, i + std::max<uint64_t>(1, read_bytes / width));
+        const uint64_t first = beg * width, last = end * width; // the bytes [first, last) are needed
+        const uint64_t read_beg = direct ? (first / sector) * sector : first;
+        const uint64_t read_end = direct ? div_ceil(last, sector) * sector : last;
+        const uint64_t num_read = pread_fully(fd, buffer, read_end - read_beg, read_beg);
+        if (read_beg + num_read < last) throw std::runtime_error("cannot read a file");
+        if (!direct) platform::drop_cached(fd, read_beg, num_read);
+        data = buffer + (first - read_beg);
+    }
+
+public:
+    /**
+     * @brief opens a file of values
+     * @param path path of the file
+     * @param width bytes per value
+     * @param read_bytes number of bytes read at once (at least width)
+     */
+    array_file_reader(const std::string& path, uint64_t width, uint64_t read_bytes)
+        : width(width), mask(width >= sizeof(uint64_t) ? ~uint64_t { 0 } : (uint64_t { 1 } << (8 * width)) - 1),
+          read_bytes(read_bytes)
+    {
+        std::error_code ec;
+        num_values = std::filesystem::file_size(path, ec) / width;
+        if (ec) throw std::runtime_error("cannot read " + path);
+        buffer = (uint8_t*) platform::allocate_aligned_counted(div_ceil(read_bytes, sector) * sector + 2 * sector,
+            sector);
+        if (buffer == nullptr) throw std::bad_alloc();
+        fd = open_direct_or_buffered(path, platform::file_access::read, direct);
+
+        if (fd < 0) {
+            platform::free_aligned(buffer);
+            throw std::runtime_error("cannot read " + path);
+        }
+
+        if (!direct) advise_uncached(fd);
+    }
+
+    ~array_file_reader()
+    {
+        platform::free_aligned(buffer);
+        platform::close(fd);
+    }
+
+    array_file_reader(const array_file_reader&) = delete;
+    array_file_reader& operator=(const array_file_reader&) = delete;
+
+    // returns the bytes of value i
+    inline const uint8_t* bytes(uint64_t i)
+    {
+        if (i < beg || i >= end) [[unlikely]] read_from(i);
+        return data + (i - beg) * width;
+    }
+
+    // returns value i (width <= 8; loads 8 bytes, which the buffer has after each value, and masks them)
+    inline uint64_t operator[](uint64_t i)
+    {
+        uint64_t val;
+        std::memcpy(&val, bytes(i), sizeof(uint64_t));
+        return val & mask;
+    }
+
+    // returns the bytes of the values [from, to) (to - from <= read_bytes / width), valid until the next read
+    const uint8_t* view(uint64_t from, uint64_t to)
+    {
+        if (from < beg || to > end) read_from(from);
+        return data + (from - beg) * width;
+    }
+
+    // copies the values [from, to) to dst
+    void read(uint64_t from, uint64_t to, void* dst)
+    {
+        uint8_t* out = (uint8_t*) dst;
+
+        for (uint64_t i = from; i < to;) {
+            const uint8_t* src = bytes(i);
+            const uint64_t num = std::min(to, end) - i;
+            std::memcpy(out, src, num * width);
+            out += num * width;
+            i += num;
+        }
+    }
 };
 
 #include "files.tpp"

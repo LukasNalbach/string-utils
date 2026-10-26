@@ -27,7 +27,8 @@
 /**
  * @file scan.hpp
  * @brief FASTA files as texts: the transformation of the bytes of a FASTA file into the symbols of a text, the
- *        parallel scan of a FASTA file with samples of the text, and a reader of the text that starts at the samples
+ *        parallel scan of a FASTA file with samples of the text, a reader of the text that starts at the samples, and
+ *        readers of ranges of the text that start without a scan and scan their range while they read it
  */
 
 #ifndef STRING_UTILS_FASTA_SCAN_HPP
@@ -39,6 +40,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -192,7 +194,7 @@ struct fasta_transform {
      */
     inline step_t body_step(uint8_t c, state_t& st, uint8_t& out) const
     {
-        uint8_t u = (to_upper && c >= 'a' && c <= 'z') ? uint8_t(c - 'a' + 'A') : c;
+        const uint8_t u = lookup_byte(c);
 
         if (in_alphabet[u]) {
             st.in_masked_run = false;
@@ -205,6 +207,15 @@ struct fasta_transform {
         st.in_masked_run = true;
         return _separator;
     }
+
+    // returns the byte that a body byte is looked up as in the alphabet (upper-cased, if to_upper)
+    inline uint8_t lookup_byte(uint8_t c) const
+    {
+        return (to_upper && c >= 'a' && c <= 'z') ? uint8_t(c - 'a' + 'A') : c;
+    }
+
+    // returns whether a body byte is masked (not in the alphabet, see body_step)
+    inline bool masked(uint8_t c) const { return in_alphabet[lookup_byte(c)] == 0; }
 
     // returns whether every body byte yields itself (see body_step)
     bool keeps_body_bytes() const
@@ -354,6 +365,17 @@ struct fasta_window {
 
     // returns whether the bytes at pos and after it can be processed without loading another window
     bool contains(uint64_t pos) const { return bytes != nullptr && pos >= begin && pos < limit; }
+
+    /**
+     * @brief applies a transformation to the bytes [pos, min(lim, limit)) of the window (see fasta_transform::walk)
+     * @return the offset in the file after the last processed byte
+     */
+    template <typename handler_t>
+    uint64_t walk(const fasta_transform& transform, uint64_t pos, uint64_t lim, fasta_transform::state_t& st,
+        handler_t& h) const
+    {
+        return from + transform.walk(bytes, pos - from, std::min(lim, limit) - from, n, st, h);
+    }
 };
 
 /**
@@ -424,14 +446,20 @@ struct fasta_scan_params {
 };
 
 /**
- * @brief passes the bytes of a FASTA file that fasta_transform::walk hands over to a chunk (see scan_fasta_range)
+ * @brief the handler of fasta_transform::walk that adds the symbols, samples and line events of a byte range of a FASTA
+ *        file to a chunk (see scan_fasta_range); with writes, it writes the symbols to dst instead of counting their
+ *        frequencies and stops the walk when dst is full
  * @tparam chunk_t type of the chunk (derived from fasta_chunk)
+ * @tparam writes whether the symbols are written to dst
  */
-template <typename chunk_t>
+template <typename chunk_t, bool writes = false>
 class fasta_range_scanner {
 private:
     using state_t = fasta_transform::state_t;
     using step_t = fasta_transform::step_t;
+
+    // (writes) the value of body_symbol for a masked byte
+    static constexpr uint16_t masked_body = 256;
 
     chunk_t& out; // the chunk
     const fasta_transform& transform; // the transformation
@@ -439,7 +467,16 @@ private:
     const uint64_t sample_period; // a sample every sample_period positions of the chunk (0: none)
     uint64_t next_sample; // position of the next sample
     bool first_symbol = true; // no symbol has been yielded yet
+    // (writes) [0..255] body_symbol[c] = the symbol that the body byte c yields, or masked_body if it is masked
+    std::array<uint16_t, 256> body_symbol {};
 
+public:
+    uint64_t from = 0; // offset in the file of the first byte passed to walk
+    uint8_t* dst = nullptr; // (writes) the destination of the symbols
+    uint64_t capacity = 0; // (writes) the number of symbols that fit into dst
+    uint64_t written = 0; // (writes) the number of symbols written to dst
+
+private:
     // adds a symbol that the byte at offset yields, where before is the state before it
     void yield(uint8_t symbol, uint64_t offset, const state_t& before, step_t step, bool in_header_after)
     {
@@ -449,29 +486,90 @@ private:
         }
 
         first_symbol = false;
-        out.freq[symbol]++;
+        if constexpr (!writes) out.freq[symbol]++;
 
         if (out.text_size == next_sample && sample_period != 0) {
             out.samples.push_back(fasta_sample { out.text_size, offset, before.to_bits() });
             next_sample += sample_period;
         }
 
+        if constexpr (writes) dst[written++] = symbol;
         out.text_size++;
     }
 
-public:
-    uint64_t from = 0; // offset in the file of the first byte passed to walk
+    /* (writes) processes the body bytes of body() if they are not kept as they are (see fasta_transform::body_step):
+       writes their symbols to dst; at most min(len, capacity - written) bytes are processed (each yields at most one
+       symbol) */
+    uint64_t write_body(const uint8_t* bytes, uint64_t len, uint64_t i, state_t& st)
+    {
+        uint8_t* const sym = dst + written;
+        const uint64_t end = std::min(len, capacity - written);
+        const uint8_t separator = transform.separator;
+        const uint64_t base = out.text_size; // the position in the chunk of sym[0]
+        // the position of the next sample relative to base (none if sample_period is 0)
+        uint64_t sample_at = sample_period != 0 ? next_sample - base : std::numeric_limits<uint64_t>::max();
+        bool masked = st.in_masked_run;
+        uint64_t k = 0; // number of symbols written
+        uint64_t x = 0; // number of bytes processed
+        uint64_t letters = 0; // number of bytes that yield themselves
 
+        for (; x < end; x++) {
+            const uint16_t s = body_symbol[bytes[x]];
+            const bool is_masked = s == masked_body;
+            if (is_masked && masked) continue;
+
+            if (k == sample_at) [[unlikely]] {
+                state_t before = st;
+                before.in_masked_run = masked;
+                out.samples.push_back(fasta_sample { base + k, from + i + x, before.to_bits() });
+                sample_at += sample_period;
+            }
+
+            // the first symbol of the chunk is the separator of a masked run
+            if (is_masked && first_symbol && k == 0) [[unlikely]] out.starts_in_masked_run = true;
+            sym[k++] = is_masked ? separator : uint8_t(s);
+            letters += !is_masked;
+            masked = is_masked;
+        }
+
+        if (k != 0) first_symbol = false;
+        if (sample_period != 0) next_sample = base + sample_at;
+        st.in_masked_run = masked;
+        out.text_size += k;
+        written += k;
+        out.sequence_symbols(letters);
+        return x;
+    }
+
+public:
     fasta_range_scanner(chunk_t& out, const fasta_transform& transform, uint64_t sample_period)
         : out(out), transform(transform), keeps(transform.keeps_body_bytes()), sample_period(sample_period),
-          next_sample(sample_period) { }
+          next_sample(sample_period)
+    {
+        if constexpr (writes) {
+            for (uint64_t c = 0; c < body_symbol.size(); c++) {
+                const uint8_t u = transform.lookup_byte(uint8_t(c));
+                body_symbol[c] = transform.in_alphabet[u] ? u : masked_body;
+            }
+        }
+    }
 
-    bool full() const { return false; }
+    bool full() const
+    {
+        if constexpr (writes) return written == capacity;
+        return false;
+    }
 
     uint64_t body(const uint8_t* bytes, uint64_t len, uint64_t i, state_t& st)
     {
         if (keeps) {
-            for (uint64_t x = 0; x < len; x++) out.freq[bytes[x]]++;
+            if constexpr (writes) {
+                len = std::min(len, capacity - written);
+                std::memcpy(dst + written, bytes, len);
+                written += len;
+            } else {
+                for (uint64_t x = 0; x < len; x++) out.freq[bytes[x]]++;
+            }
 
             for (; sample_period != 0 && next_sample < out.text_size + len; next_sample += sample_period) {
                 const uint64_t x = next_sample - out.text_size;
@@ -487,9 +585,11 @@ public:
             return len;
         }
 
+        if constexpr (writes) return write_body(bytes, len, i, st);
         uint64_t symbols = 0; // number of bytes that yield a symbol
+        uint64_t x = 0; // number of bytes processed
 
-        for (uint64_t x = 0; x < len; x++) {
+        for (; x < len; x++) {
             const state_t before = st;
             uint8_t symbol = transform.separator;
             const step_t step = transform.body_step(bytes[x], st, symbol);
@@ -498,7 +598,7 @@ public:
         }
 
         out.sequence_symbols(symbols);
-        return len;
+        return x;
     }
 
     void header(const uint8_t* bytes, uint64_t len) { out.header_bytes(bytes, len); }
@@ -539,9 +639,7 @@ inline void scan_fasta_range(bytes_t& in, uint64_t begin, uint64_t end, const fa
     for (uint64_t pos = begin; pos < end;) {
         window.load(in, pos);
         scanner.from = window.from;
-        const uint64_t lim = std::min(end, window.limit);
-        const uint64_t next = window.from
-            + transform.walk(window.bytes, pos - window.from, lim - window.from, window.n, st, scanner);
+        const uint64_t next = window.walk(transform, pos, end, st, scanner);
         if (progress != nullptr) progress->advance(next - pos);
         pos = next;
     }
@@ -631,6 +729,54 @@ inline fasta_scan scan_fasta_lines(open_fnc_t open, const fasta_transform& trans
 }
 
 /**
+ * @brief the handler of fasta_transform::walk that writes the yielded symbols to dst (or skips them, if dst is nullptr)
+ *        and stops the walk when len symbols have been written
+ */
+struct fasta_symbol_writer {
+    using state_t = fasta_transform::state_t;
+    using step_t = fasta_transform::step_t;
+
+    const fasta_transform& transform; // the transformation
+    const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    uint8_t* dst; // the destination
+    uint64_t len; // the number of symbols to write
+    uint64_t written = 0; // the number of symbols written
+
+    bool full() const { return written == len; }
+
+    uint64_t body(const uint8_t* bytes, uint64_t n, uint64_t, state_t& st)
+    {
+        if (keeps) {
+            const uint64_t copied = std::min(n, len - written);
+            if (dst != nullptr) std::memcpy(dst + written, bytes, copied);
+            written += copied;
+            if (copied > 0) st.in_masked_run = false;
+            return copied;
+        }
+
+        uint64_t x = 0;
+
+        for (; x < n && written < len; x++) {
+            uint8_t symbol = transform.separator;
+            if (transform.body_step(bytes[x], st, symbol) == fasta_transform::_nothing) continue;
+            if (dst != nullptr) dst[written] = symbol;
+            written++;
+        }
+
+        return x;
+    }
+
+    void header(const uint8_t*, uint64_t) { }
+
+    void step(uint64_t, uint8_t, const state_t&, const state_t&, step_t step, uint8_t symbol, bool)
+    {
+        if (step == fasta_transform::_nothing) return;
+        if (dst != nullptr) dst[written] = symbol;
+        written++;
+    }
+};
+
+/**
  * @brief reads the text of a FASTA file (see fasta_transform); a read starts at the last sample at or before the
  *        position it reads (see fasta_sample), and consecutive reads of consecutive ranges continue the scan of the
  *        file
@@ -641,48 +787,6 @@ class fasta_text_reader {
 private:
     using state_t = fasta_transform::state_t;
     using step_t = fasta_transform::step_t;
-
-    // writes the symbols that fasta_transform::walk yields to dst (or skips them, if dst is nullptr)
-    struct symbol_writer {
-        const fasta_transform& transform;
-        const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
-        uint8_t* dst; // the destination
-        uint64_t len; // the number of symbols to write
-        uint64_t written = 0; // the number of symbols written
-
-        bool full() const { return written == len; }
-
-        uint64_t body(const uint8_t* bytes, uint64_t n, uint64_t, state_t& st)
-        {
-            if (keeps) {
-                const uint64_t copied = std::min(n, len - written);
-                if (dst != nullptr) std::memcpy(dst + written, bytes, copied);
-                written += copied;
-                if (copied > 0) st.in_masked_run = false;
-                return copied;
-            }
-
-            uint64_t x = 0;
-
-            for (; x < n && written < len; x++) {
-                uint8_t symbol = transform.separator;
-                if (transform.body_step(bytes[x], st, symbol) == fasta_transform::_nothing) continue;
-                if (dst != nullptr) dst[written] = symbol;
-                written++;
-            }
-
-            return x;
-        }
-
-        void header(const uint8_t*, uint64_t) { }
-
-        void step(uint64_t, uint8_t, const state_t&, const state_t&, step_t step, uint8_t symbol, bool)
-        {
-            if (step == fasta_transform::_nothing) return;
-            if (dst != nullptr) dst[written] = symbol;
-            written++;
-        }
-    };
 
     const fasta_transform& transform; // the transformation
     bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
@@ -708,13 +812,12 @@ private:
     // writes the next len symbols of the text to dst (skips them, if dst is nullptr)
     void scan(uint64_t len, uint8_t* dst)
     {
-        symbol_writer writer { transform, keeps, dst, len };
+        fasta_symbol_writer writer { transform, keeps, dst, len };
 
         while (!writer.full()) {
             if (offset >= file.size()) throw std::runtime_error("the FASTA file ends before its text does");
             if (!window.contains(offset)) window.load(file, offset);
-            offset = window.from + transform.walk(window.bytes, offset - window.from, window.limit - window.from,
-                window.n, state, writer);
+            offset = window.walk(transform, offset, window.limit, state, writer);
         }
 
         next += len;
@@ -744,6 +847,282 @@ public:
     {
         if (pos != next) seek(pos);
         scan(len, dst);
+    }
+};
+
+/**
+ * @brief follows the state of the transformation over bytes of a FASTA file (see fasta_transform::walk) without
+ *        yielding symbols; the state may be unknown in in_masked_run at the start, which the next body byte or header
+ *        line settles (known)
+ */
+struct fasta_state_walker {
+    using state_t = fasta_transform::state_t;
+    using step_t = fasta_transform::step_t;
+
+    const fasta_transform& transform; // the transformation
+    bool known; // whether in_masked_run is known
+    bool stop_when_known = false; // the walk stops directly after the byte that settles in_masked_run
+    bool stop_at_header = false; // the walk stops directly after the '>' of the first header line
+    bool stop_after_line_start = false; // the walk stops directly after the byte that ends the start of a line
+    bool header_found = false; // a header line has started
+    bool line_started = false; // a byte has ended the start of a line
+    uint64_t header_offset = 0; // offset in the file of the '>' of that header line
+    uint64_t from = 0; // offset in the file of the first byte passed to walk
+
+    bool full() const
+    {
+        return (stop_when_known && known) || (stop_at_header && header_found)
+            || (stop_after_line_start && line_started);
+    }
+
+    uint64_t body(const uint8_t* bytes, uint64_t len, uint64_t, state_t& st)
+    {
+        if (stop_when_known && !known) len = 1;
+        st.in_masked_run = transform.masked(bytes[len - 1]);
+        known = true;
+        return len;
+    }
+
+    void header(const uint8_t*, uint64_t) { }
+
+    void step(uint64_t i, uint8_t, const state_t& before, const state_t& after, step_t step, uint8_t, bool)
+    {
+        if (before.at_line_start && !after.at_line_start) line_started = true;
+
+        if (after.in_header) {
+            if (before.in_header || header_found) return;
+            header_found = true;
+            header_offset = from + i;
+            known = true;
+        } else if (after.in_sequence && (step != fasta_transform::_nothing || after.in_masked_run)) {
+            known = true; // a body byte (see fasta_transform::body_step)
+        }
+    }
+};
+
+/**
+ * @brief returns the offset in a FASTA file of the '>' of its first header line (the size of the file if it has none)
+ * @param in the file
+ * @param transform the transformation
+ */
+template <typename bytes_t>
+inline uint64_t fasta_first_header(bytes_t& in, const fasta_transform& transform)
+{
+    fasta_state_walker walker { transform, true };
+    walker.stop_at_header = true;
+    fasta_transform::state_t st;
+    fasta_window<bytes_t> window;
+    const uint64_t size = in.size();
+
+    for (uint64_t pos = 0; pos < size && !walker.header_found;) {
+        window.load(in, pos);
+        walker.from = window.from;
+        pos = window.walk(transform, pos, window.limit, st, walker);
+    }
+
+    return walker.header_found ? walker.header_offset : size;
+}
+
+/** @brief the first byte of a range of a FASTA file and the state of the transformation before it */
+struct fasta_range_bound {
+    uint64_t offset = 0; // offset in the file of the byte
+    fasta_transform::state_t state; // the state before it
+};
+
+/**
+ * @brief returns the first offset at or after pos at which the state of the transformation follows from the line it
+ *        is in, so that a range of the file starting there can be read without the bytes before that line: the state
+ *        at the start of the line is known except in_masked_run, the line is walked to pos (if pos lies more than a
+ *        window after the start of the line, only the first byte of the line, which tells its type, and the byte
+ *        before pos) and on until the next body byte or header line settles in_masked_run
+ * @param in the file
+ * @param pos [1..size-1] the offset
+ * @param line the start of the line containing pos (the offset after the last line feed before pos, or 0)
+ * @param transform the transformation
+ * @param first_header the offset of the first header line (see fasta_first_header)
+ * @return the offset (the size of the file, if there is none) and the state before it
+ */
+template <typename bytes_t>
+inline fasta_range_bound fasta_range_start(bytes_t& in, uint64_t pos, uint64_t line, const fasta_transform& transform,
+    uint64_t first_header)
+{
+    using state_t = fasta_transform::state_t;
+    const uint64_t size = in.size();
+    state_t st; // the state at the start of the line, apart from in_masked_run
+    st.in_sequence = line > first_header || (transform.lines_before_first_header && line > 0);
+    fasta_state_walker walker { transform, !st.in_sequence };
+    fasta_window<bytes_t> window;
+    uint64_t offset = line;
+
+    if (pos - line > bytes_t::block) {
+        walker.stop_after_line_start = true;
+
+        while (offset < pos && !walker.line_started) {
+            if (!window.contains(offset)) window.load(in, offset);
+            walker.from = window.from;
+            offset = window.walk(transform, offset, pos, st, walker);
+        }
+
+        // in a header line in_masked_run is false; in a sequence line the byte before pos settles it
+        walker.stop_after_line_start = false;
+        offset = std::max(offset, pos - 1);
+        st.in_masked_run = false;
+        walker.known = st.in_header || !st.in_sequence;
+    }
+
+    while (offset < size && (offset < pos || !walker.known)) {
+        if (!window.contains(offset)) window.load(in, offset);
+        walker.from = window.from;
+        walker.stop_when_known = offset >= pos;
+        offset = window.walk(transform, offset, offset < pos ? pos : window.limit, st, walker);
+    }
+
+    return { offset, st };
+}
+
+/**
+ * @brief returns the starts of ranges of a FASTA file (see fasta_range_start): the start of the line containing
+ *        positions[i] is searched backward down to positions[i - 1] only, then the starts of the lines are taken over
+ *        from the positions before, so each byte of the file is searched at most once
+ * @param open returns a new reader of the file (a direct_reader or a memory_file)
+ * @param transform the transformation
+ * @param positions [0..q-1] the offsets in increasing order (positions[0] = 0, the start of the first range)
+ * @param num_threads the number of threads
+ * @return [0..q-1] the starts of the ranges
+ */
+template <typename open_fnc_t>
+inline std::vector<fasta_range_bound> fasta_range_starts(open_fnc_t open, const fasta_transform& transform,
+    const std::vector<uint64_t>& positions, uint64_t num_threads)
+{
+    using bytes_t = decltype(open());
+    constexpr uint64_t no_line_feed = std::numeric_limits<uint64_t>::max();
+    const uint64_t q = positions.size();
+    std::vector<fasta_range_bound> bounds(q);
+    bytes_t file = open();
+    const uint64_t size = file.size();
+    const uint64_t first_header = fasta_first_header(file, transform);
+    // [1..q-1] the offset after the last line feed in [positions[i - 1], positions[i]), or no_line_feed
+    std::vector<uint64_t> after_line_feed(q, no_line_feed);
+
+    #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 1)
+    for (uint64_t i = 1; i < q; i++) {
+        bytes_t in = open();
+
+        for (uint64_t end = std::min(positions[i], size); end > positions[i - 1];) {
+            const uint64_t beg = end - std::min(end - positions[i - 1], bytes_t::block);
+            const uint8_t* bytes = in.read(beg, end);
+            const std::reverse_iterator<const uint8_t*> last(bytes + (end - beg)), first(bytes);
+            const auto line_feed = std::find(last, first, fasta_line_feed);
+
+            if (line_feed != first) {
+                after_line_feed[i] = beg + uint64_t(line_feed.base() - bytes);
+                break;
+            }
+
+            end = beg;
+        }
+    }
+
+    // [0..q-1] the start of the line containing positions[i]
+    std::vector<uint64_t> line(q, 0);
+    for (uint64_t i = 1; i < q; i++) line[i] = after_line_feed[i] != no_line_feed ? after_line_feed[i] : line[i - 1];
+
+    #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 1)
+    for (uint64_t i = 1; i < q; i++) {
+        if (positions[i] >= size) {
+            bounds[i].offset = size;
+            continue;
+        }
+
+        bytes_t in = open();
+        bounds[i] = fasta_range_start(in, positions[i], line[i], transform, first_header);
+    }
+
+    return bounds;
+}
+
+/**
+ * @brief reads the text of a FASTA file from the start of a range on (see fasta_range_start) in blocks: first the text
+ *        of the range, whose length, samples and line events go to a chunk (see scan_fasta_range; not the symbol
+ *        frequencies, see fasta_range_scanner), then the text after the range; no block contains symbols of both
+ * @tparam bytes_t type of the file (direct_reader or memory_file)
+ * @tparam chunk_t type of the chunk (derived from fasta_chunk)
+ */
+template <typename bytes_t, typename chunk_t = fasta_chunk>
+class fasta_range_reader {
+private:
+    const fasta_transform& transform; // the transformation
+    const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    bytes_t file; // the file
+    fasta_window<bytes_t> window; // the bytes of the file around offset
+    uint64_t offset; // offset in the file of the next byte to read
+    uint64_t end; // offset in the file after the last byte of the range
+    fasta_transform::state_t state; // the state of the transformation before the byte at offset
+    chunk_t& chunk; // the chunk of the range
+    fasta_range_scanner<chunk_t, true> scanner; // reads the text of the range
+    phase_progress* progress; // if not nullptr, counts the bytes of the range read
+
+public:
+    /**
+     * @brief starts reading the text of a range
+     * @param file the file
+     * @param transform the transformation (it must stay valid while the reader is used)
+     * @param begin the start of the range (see fasta_range_start)
+     * @param end the offset after the last byte of the range
+     * @param chunk the chunk of the range (reset here)
+     * @param sample_period a sample every sample_period positions of the range (0: none, see scan_fasta_range)
+     * @param progress if not nullptr, counts the bytes of the range read
+     */
+    fasta_range_reader(bytes_t&& file, const fasta_transform& transform, const fasta_range_bound& begin,
+        uint64_t end, chunk_t& chunk, uint64_t sample_period, phase_progress* progress)
+        : transform(transform), keeps(transform.keeps_body_bytes()), file(std::move(file)), offset(begin.offset),
+          end(end), state(begin.state), chunk(chunk), scanner(chunk, transform, sample_period), progress(progress)
+    {
+        chunk = chunk_t();
+        chunk.start_state = begin.state;
+    }
+
+    // returns whether the bytes of the range have been read (then the chunk is complete)
+    bool range_read() const { return offset >= end; }
+
+    /**
+     * @brief writes the next at most len symbols of the text to dst; the symbols of the range and the ones after it
+     *        are not written by the same call
+     * @param dst the destination
+     * @param len [1..] the number of symbols
+     * @return the number of symbols written (0: the text has ended)
+     */
+    uint64_t read(uint8_t* dst, uint64_t len)
+    {
+        if (offset < end) {
+            scanner.dst = dst;
+            scanner.capacity = len;
+            scanner.written = 0;
+
+            while (offset < end && !scanner.full()) {
+                if (!window.contains(offset)) window.load(file, offset);
+                scanner.from = window.from;
+                const uint64_t next = window.walk(transform, offset, end, state, scanner);
+                if (progress != nullptr) progress->advance(next - offset);
+                offset = next;
+            }
+
+            if (offset >= end) {
+                chunk.end_state = state;
+                chunk.ends_in_masked_run = state.in_masked_run;
+            }
+
+            if (scanner.written != 0) return scanner.written;
+        }
+
+        fasta_symbol_writer writer { transform, keeps, dst, len };
+
+        while (offset < file.size() && !writer.full()) {
+            if (!window.contains(offset)) window.load(file, offset);
+            offset = window.walk(transform, offset, window.limit, state, writer);
+        }
+
+        return writer.written;
     }
 };
 

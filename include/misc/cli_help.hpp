@@ -27,14 +27,16 @@
 /**
  * @file cli_help.hpp
  * @brief the command-line interface of the tools: the help of a mode in one layout (a description, the usage line, the
- *        arguments and the options in groups, in the order what is stored or computed, encodings, input, output,
- *        execution, measurement; each option first lists the values it takes, then its explanation), reading the
- *        arguments with checked values, and running a mode with uniform error messages and exit codes
+ *        arguments and the options in groups, in the order arguments, input, what is stored or computed, encodings,
+ *        output, execution, measurement; each option first lists the values it takes, then its explanation), reading
+ *        the arguments with checked values, and running a mode with uniform error messages and exit codes
  */
 
 #ifndef STRING_UTILS_MISC_CLI_HELP_HPP
 #define STRING_UTILS_MISC_CLI_HELP_HPP
 
+#include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <exception>
@@ -62,6 +64,9 @@ inline constexpr uint64_t help_indent = 3;
 
 // the values of the option -p <threads> of every tool
 inline constexpr std::string_view threads_values = "integer >= 1 (default: all CPUs the process may run on)";
+
+// the first byte of a FASTA file (the start of its first header line)
+inline constexpr char fasta_header_start = '>';
 
 /**
  * @brief formats a default value for a help, as an output stream writes it (e.g. 1, 0.05)
@@ -143,6 +148,17 @@ public:
     void option_measurement()
     {
         option("-m <file> <name>", "a path and a name", "append measurement data to this file; <name> names the text");
+    }
+
+    /**
+     * @brief prints the option -fasta <mode> (see read_fasta_option)
+     * @param explanation what the FASTA mode does
+     */
+    void option_fasta(const std::string& explanation)
+    {
+        option("-fasta <mode>", "on | off | auto (default: auto)", explanation + "\nauto: on for files that start "
+            "with '" + std::string(1, fasta_header_start) + "' and whose first line after the header lines consists of "
+            "letters, '*', '-' and '.' only");
     }
 
     /**
@@ -350,6 +366,87 @@ inline void read_measurement_option(cli_arguments& args, direct_ofstream& file, 
     const std::string path = args.value("-m");
     text_name = args.value("-m");
     if (!open_measurement_file(file, path)) throw std::runtime_error("cannot open or create " + path);
+}
+
+/** @brief the values of the option -fasta <mode> */
+enum class fasta_option { on, off, detect };
+
+/**
+ * @brief reads the value of the option -fasta <mode>
+ * @param args the arguments, positioned after -fasta
+ * @throws usage_error "-fasta expects on, off or auto"
+ */
+inline fasta_option read_fasta_option(cli_arguments& args)
+{
+    const std::string mode = args.value("-fasta");
+    if (mode == "on") return fasta_option::on;
+    if (mode == "off") return fasta_option::off;
+    if (mode == "auto") return fasta_option::detect;
+    throw usage_error("-fasta expects on, off or auto");
+}
+
+/**
+ * @brief reads the value of an option that is switched on or off
+ * @param args the arguments, positioned after the option
+ * @param option the option (for the error message)
+ * @return whether the option is switched on
+ * @throws usage_error "<option> expects on or off"
+ */
+inline bool read_on_off(cli_arguments& args, const std::string& option)
+{
+    const std::string value = args.value(option);
+    if (value == "on") return true;
+    if (value == "off") return false;
+    throw usage_error(option + " expects on or off");
+}
+
+/**
+ * @brief returns whether a symbol can occur in a line of a FASTA file that is no header line: a letter, '*', '-',
+ *        '.' or '\r' (the end of a line with the line break "\r\n")
+ * @param c a symbol
+ */
+inline bool is_fasta_line_symbol(char c)
+{
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '*' || c == '-' || c == '.' || c == '\r';
+}
+
+/**
+ * @brief returns whether a file starts like a FASTA file: with fasta_header_start, and the first line that is no
+ *        header line consists of the symbols of is_fasta_line_symbol only; only the first
+ *        direct_input_filebuf::buffer_length bytes of the file are read
+ * @param path the path of the file
+ */
+inline bool starts_like_fasta(const std::string& path)
+{
+    constexpr uint64_t max_bytes = direct_input_filebuf::buffer_length;
+    direct_ifstream in(path, std::ios_base::in, max_bytes);
+    std::string start(max_bytes, '\0');
+    in.read(start.data(), std::streamsize(max_bytes));
+    start.resize(uint64_t(in.gcount()));
+    if (!start.starts_with(fasta_header_start)) return false;
+    uint64_t line_start = 0; // the start of the current line in start
+
+    while (line_start < start.size()) {
+        const uint64_t line_end = std::min(start.find('\n', line_start), start.size());
+
+        if (start[line_start] != fasta_header_start) {
+            return std::all_of(start.begin() + line_start, start.begin() + line_end, is_fasta_line_symbol);
+        }
+
+        line_start = line_end + 1;
+    }
+
+    return true;
+}
+
+/**
+ * @brief returns whether a file is read in the FASTA mode
+ * @param mode the value of -fasta
+ * @param path the path of the file
+ */
+inline bool uses_fasta_mode(fasta_option mode, const std::string& path)
+{
+    return mode == fasta_option::on || (mode == fasta_option::detect && starts_like_fasta(path));
 }
 
 /**
