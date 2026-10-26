@@ -62,12 +62,6 @@
 #include <misc/postcompressors.hpp>
 #include <misc/temp_files.hpp>
 
-// the width of a line of the help of a compressor (the width of a terminal)
-inline constexpr uint64_t compressor_help_width = 80;
-
-// the first byte of a FASTA file (the start of its first header line)
-inline constexpr char fasta_header_start = '>';
-
 /** @brief what a compressor supports besides the common options */
 struct compressor_spec {
     std::string_view name; // the name of the tool, e.g. "xyz-comp"
@@ -84,7 +78,7 @@ struct compressor_cli_t {
     std::string path_input_file; // <input_file>
     // compression: <base_name>.<ending>[.<postcompressor>] (see -o); -d: the restored text
     std::string path_output_file;
-    uint64_t threads = omp_get_max_threads(); // -t
+    uint64_t threads = omp_get_max_threads(); // -p
     // -pc (with -d: from the ending of <input_file>); nullptr <=> the tool does not post-compress
     const postcompressor_spec* postcompressor = nullptr;
     uint64_t quality = 0; // -<quality> (or the default of the postcompressor)
@@ -93,43 +87,22 @@ struct compressor_cli_t {
     std::string path_ranges_file; // -ranges; empty <=> -d restores the whole text
     bool log = true; // false <=> -q
     direct_ofstream measurement_file; // -m
-    std::string text_name; // the file name of <input_file> (compression) or of the output file (-d)
+    std::string text_name; // the <name> of -m
+};
+
+/** @brief the part of the help a compressor prints its options in (see print_compressor_help) */
+enum class compressor_help_part {
+    tool, // the groups of the options of the tool, after the group input
+    execution // the options of the tool in the group execution
 };
 
 /**
- * @brief returns whether a symbol can occur in a sequence line of a FASTA file: a letter (a nucleotide or amino acid
- *        code), '*' (stop codon), '-' or '.' (gap), or '\r' (Windows line end)
- * @param c a symbol
- */
-inline bool is_fasta_sequence_symbol(char c)
-{
-    return std::isalpha(static_cast<unsigned char>(c)) || c == '*' || c == '-' || c == '.' || c == '\r';
-}
-
-/**
- * @brief returns whether a file starts like a FASTA file: with fasta_header_start, and the first line that is no
- *        header line consists of sequence symbols only (see is_fasta_sequence_symbol)
- * @param path the path of the file
- */
-inline bool starts_like_fasta(const std::string& path)
-{
-    direct_ifstream in(path);
-    std::string line;
-    if (!std::getline(in, line) || !line.starts_with(fasta_header_start)) return false;
-
-    while (std::getline(in, line)) {
-        if (line.starts_with(fasta_header_start)) continue;
-        return std::all_of(line.begin(), line.end(), is_fasta_sequence_symbol);
-    }
-
-    return true;
-}
-
-/**
- * @brief prints the help of a compressor: the common options, then the options of the tool
+ * @brief prints the help of a compressor: the groups arguments and input, the groups of the tool, then the groups
+ *        output, execution and measurement
  * @param out the stream the help is written to
  * @param spec the compressor
- * @param print_options print_options(h) prints the options of the tool with the help_printer h
+ * @param print_options print_options(h, part) prints the options of the tool in a part of the help (see
+ *        compressor_help_part) with the help_printer h
  */
 template <typename print_options_fnc_t>
 void print_compressor_help(std::ostream& out, const compressor_spec& spec, print_options_fnc_t print_options)
@@ -139,20 +112,29 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
     const bool with_postcompressor = !spec.default_postcompressor.empty();
     const std::string ending = file_ending + (with_postcompressor ? ".<postcompressor>" : "");
     const std::string ending_pattern = file_ending + (with_postcompressor ? "[.<postcompressor>]" : "");
-    help_printer h(out, compressor_help_width);
+    help_printer h(out);
     h.intro(name + ": " + std::string(spec.description) + ".", name + " [options] <input_file>");
-    h.option("-d", "", "decompress <input_file> (*" + ending_pattern + ")");
+    h.group("arguments");
+    h.option("<input_file>", "", "the file to compress; with -d a file *" + ending_pattern);
+    h.group("input");
+    h.option("-d", "", "decompress <input_file>");
+
+    if (spec.fasta) {
+        h.option_fasta("store the header lines and the line layout of FASTA files separately from the sequences; "
+            "-d reads the mode from <input_file>");
+    }
+
+    print_options(h, compressor_help_part::tool);
+    h.group("output");
+    h.option("-o <base_name>", "a path (default: <input_file>)", "write <base_name>" + ending
+        + (with_postcompressor ? " (<base_name>" + file_ending + " with -pc none)" : "") + "; with -d: the output file "
+        "(default: <input_file> without " + ending_pattern + ")");
 
     if (spec.ranges) {
         h.option("-ranges <file>", "a path", "with -d: write only these ranges of the text, one '<position> <length>' "
             "per line (the first position is 0)" + std::string(spec.fasta ? "; of the sequence text if the file was "
             "compressed in the FASTA mode" : ""));
     }
-
-    h.option("-o <base_name>", "a path (default: <input_file>)", "write <base_name>" + ending
-        + (with_postcompressor ? " (<base_name>" + file_ending + " with -pc none)" : "") + "; with -d: the output file "
-        "(default: <input_file> without " + ending_pattern + ")");
-    h.option("-t <threads>", "integer >= 1 (default: all)", "number of threads");
 
     if (with_postcompressor) {
         std::string names; // the names of the postcompressors, separated by " | "
@@ -173,18 +155,12 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
             "block size in MB (bsc default: the largest block that needs no more memory than the construction)");
     }
 
-    if (spec.fasta) {
-        h.option("-fasta <mode>", "on | off | auto (default: auto)", "store the header lines and the line layout of "
-            "FASTA files separately from the sequences; auto: on for files that start with '"
-            + std::string(1, fasta_header_start) + "' and whose first sequence line consists of letters, '*', '-' and "
-            "'.' only");
-    }
-
+    h.group("execution");
+    h.option_threads();
+    print_options(h, compressor_help_part::execution);
     h.option("-q", "", "print nothing");
-    h.option("-v", "", "print progress and statistics (default)");
-    h.option("-m <m_file>", "a path", "append results to <m_file>");
-    h.option("-h", "", "show help");
-    print_options(h);
+    h.group("measurement");
+    h.option_measurement();
 }
 
 /**
@@ -206,9 +182,7 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
     cli_arguments args(argc, argv);
     std::string postcompressor(spec.default_postcompressor); // -pc
     std::string path_output; // -o
-    std::string path_measurement_file; // -m
-    std::string fasta_mode = "auto"; // -fasta
-    bool verbose = false; // -v
+    fasta_option fasta_mode = fasta_option::detect; // -fasta
 
     // the last argument is <input_file>
     while (args.remaining() > 1) {
@@ -218,22 +192,16 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
             cli.decompress = true;
         } else if (s == "-o") {
             path_output = args.value(s);
-        } else if (s == "-t") {
+        } else if (s == "-p") {
             cli.threads = args.integer(s, 1, omp_get_max_threads());
         } else if (s == "-q") {
-            if (verbose) throw usage_error("-q and -v cannot be combined");
             cli.log = false;
-        } else if (s == "-v") {
-            if (!cli.log) throw usage_error("-q and -v cannot be combined");
-            verbose = true;
         } else if (s == "-m") {
-            path_measurement_file = args.value(s);
+            read_measurement_option(args, cli.measurement_file, cli.text_name);
         } else if (spec.ranges && s == "-ranges") {
             cli.path_ranges_file = args.value(s);
         } else if (spec.fasta && s == "-fasta") {
-            fasta_mode = args.value(s);
-            if (fasta_mode != "on" && fasta_mode != "off" && fasta_mode != "auto")
-                throw usage_error("-fasta expects on, off or auto");
+            fasta_mode = read_fasta_option(args);
         } else if (with_postcompressor && s == "-pc") {
             postcompressor = args.value(s);
         } else if (with_postcompressor && s.size() > 1
@@ -245,10 +213,10 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
         }
     }
 
-    if (args.empty()) throw usage_error("missing <input_file>");
+    if (args.empty()) throw usage_error("expected <input_file>");
     cli.path_input_file = args.next();
     if (!std::filesystem::exists(cli.path_input_file)) throw usage_error(cli.path_input_file + " does not exist");
-    if (!cli.path_ranges_file.empty() && !cli.decompress) throw usage_error("-ranges requires -d");
+    if (!cli.path_ranges_file.empty() && !cli.decompress) throw usage_error("-ranges needs -d");
     const std::string ending = "." + std::string(spec.ending);
 
     if (cli.decompress) {
@@ -295,8 +263,7 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
             if (!cli.quality_given) cli.quality = pc.default_level;
         }
 
-        cli.fasta = fasta_mode == "on" || (fasta_mode == "auto" && spec.fasta
-            && starts_like_fasta(cli.path_input_file));
+        cli.fasta = spec.fasta && uses_fasta_mode(fasta_mode, cli.path_input_file);
         const bool postcompressed = cli.postcompressor != nullptr
             && cli.postcompressor->kind != postcompressor_kind::none;
         cli.path_output_file = (path_output.empty() ? cli.path_input_file : path_output) + ending
@@ -312,13 +279,6 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
             + cli.postcompressor->binary + "' is not on the PATH)" + (cli.decompress ? "" : "; choose another one "
             "with -pc"));
     }
-
-    if (!path_measurement_file.empty()) {
-        if (!open_measurement_file(cli.measurement_file, path_measurement_file))
-            throw std::runtime_error("cannot open or create " + path_measurement_file);
-        cli.text_name = std::filesystem::path(cli.decompress ? cli.path_output_file : cli.path_input_file)
-            .filename().string();
-    }
 }
 
 /**
@@ -327,7 +287,7 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
  * @param argc the number of command-line arguments
  * @param argv the command-line arguments
  * @param spec the compressor
- * @param print_options print_options(h) prints the options of the tool (see print_compressor_help)
+ * @param print_options print_options(h, part) prints the options of the tool (see print_compressor_help)
  * @param read_option read_option(option, args) reads an option of the tool (see read_compressor_cli)
  * @param compress compress(cli) compresses cli.path_input_file into cli.path_output_file
  * @param decompress decompress(cli) restores the text of cli.path_input_file into cli.path_output_file
@@ -463,11 +423,11 @@ inline std::vector<extract_range_t> read_ranges_file(const std::string& path)
  *        -d restores the FASTA file, -ranges extracts ranges of the sequence text.
  * @tparam parsing_t the type of the parsing
  * @param cli the options
- * @param result_type the value of the key "type" of the RESULT line (see -m)
+ * @param result_algo the value of the key "algo" of the RESULT line (see -m)
  * @param with_mode whether the file starts with the mode (the compressor has a FASTA mode)
  */
 template <typename parsing_t>
-void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, bool with_mode = false)
+void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, bool with_mode = false)
 {
     std::error_code ec;
     const uint64_t input_bytes = std::filesystem::file_size(cli.path_input_file, ec);
@@ -475,9 +435,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
     const bool postcompressed = cli.postcompressor != nullptr
         && cli.postcompressor->kind != postcompressor_kind::none;
 
-    log_out() << "decompressing " << cli.path_input_file << " (" << format_size(input_bytes) << ") with "
-              << format_threads(cli.threads) << std::endl;
-    log_out() << "output: " << cli.path_output_file << std::endl;
+    log_run_start("decompressing", cli.path_input_file, input_bytes, cli.threads, "", cli.path_output_file);
 
     const uint64_t baseline = malloc_count_current();
     malloc_count_reset_peak();
@@ -513,8 +471,10 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
         }
 
         log_phase_start(cli.log, time, loads ? "loading the parsing" : "decompressing the parsing");
-        direct_ifstream in(path_archive);
-        require_readable(in, path_archive);
+        direct_ifstream archive(path_archive);
+        require_readable(archive, path_archive);
+        phase_progress progress(cli.log, std::filesystem::file_size(path_archive, ec));
+        progress_istream in(archive, progress);
 
         if (with_mode) {
             stream_byte_reader reader(in);
@@ -530,6 +490,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
             else parsing.load(in);
         }
 
+        progress.finish();
         log_phase_end(cli.log, time);
     }
 
@@ -590,7 +551,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_type, b
 
     if (cli.measurement_file.is_open()) {
         result_line(cli.measurement_file)
-            ("type", result_type)
+            ("algo", result_algo)
             ("text", cli.text_name)
             ("n", n)
             ("num_threads", cli.threads)

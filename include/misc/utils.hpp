@@ -39,8 +39,8 @@
 #include <misc/type_utils.hpp>
 
 /**
- * @brief type of array a compressed representation (e.g. a grammar or a Lempel-Ziv parsing) is built over;
- *        determines the encoding and the supported queries
+ * @brief type of array a compressed representation is built over; determines the encoding and the supported
+ *        queries
  */
 enum array_kind_t : uint8_t {
     // the differences of consecutive values of an integer array are encoded; supports random access

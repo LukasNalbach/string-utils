@@ -35,6 +35,7 @@
 #include <bit>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <chrono>
 #include <malloc_count.h>
 #include <iostream>
@@ -705,9 +706,133 @@ public:
 };
 
 /**
+ * @brief a stream buffer that passes the bytes read or written through another stream buffer and counts them as the
+ *        steps of a phase_progress
+ */
+class progress_streambuf : public std::streambuf {
+    std::streambuf* target; // the stream buffer the bytes are passed through
+    phase_progress* progress; // counts the bytes
+    uint64_t pending = 0; // the number of bytes passed through and not yet counted
+
+    // counts bytes bytes, once at least progress->grain() bytes have been passed through
+    void count(uint64_t bytes)
+    {
+        pending += bytes;
+
+        if (pending >= progress->grain()) {
+            progress->advance(pending);
+            pending = 0;
+        }
+    }
+
+protected:
+    int_type underflow() override { return target->sgetc(); }
+
+    int_type uflow() override
+    {
+        const int_type c = target->sbumpc();
+        if (!traits_type::eq_int_type(c, traits_type::eof())) count(1);
+        return c;
+    }
+
+    // reads n bytes in pieces of progress->grain() bytes and counts each piece
+    std::streamsize xsgetn(char* s, std::streamsize n) override
+    {
+        std::streamsize read = 0;
+
+        while (read < n) {
+            const std::streamsize piece = std::min<std::streamsize>(n - read, std::streamsize(progress->grain()));
+            const std::streamsize got = target->sgetn(s + read, piece);
+            count(uint64_t(got));
+            read += got;
+            if (got < piece) break;
+        }
+
+        return read;
+    }
+
+    std::streamsize showmanyc() override { return target->in_avail(); }
+
+    int_type overflow(int_type c) override
+    {
+        if (traits_type::eq_int_type(c, traits_type::eof())) return traits_type::not_eof(c);
+        const int_type written = target->sputc(traits_type::to_char_type(c));
+        if (!traits_type::eq_int_type(written, traits_type::eof())) count(1);
+        return written;
+    }
+
+    // writes n bytes in pieces of progress->grain() bytes and counts each piece
+    std::streamsize xsputn(const char* s, std::streamsize n) override
+    {
+        std::streamsize written = 0;
+
+        while (written < n) {
+            const std::streamsize piece = std::min<std::streamsize>(n - written, std::streamsize(progress->grain()));
+            const std::streamsize put = target->sputn(s + written, piece);
+            count(uint64_t(put));
+            written += put;
+            if (put < piece) break;
+        }
+
+        return written;
+    }
+
+    int sync() override { return target->pubsync(); }
+
+    pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode which) override
+    {
+        return target->pubseekoff(off, dir, which);
+    }
+
+    pos_type seekpos(pos_type pos, std::ios_base::openmode which) override { return target->pubseekpos(pos, which); }
+
+public:
+    /**
+     * @param stream the stream whose stream buffer the bytes are passed through
+     * @param progress counts the bytes
+     */
+    progress_streambuf(std::ios& stream, phase_progress& progress) : target(stream.rdbuf()), progress(&progress) {}
+
+    ~progress_streambuf() override { progress->advance(pending); }
+};
+
+/** @brief an input stream that reads from another stream and counts the bytes read (see progress_streambuf) */
+class progress_istream : public std::istream {
+    progress_streambuf buf; // passes the bytes through
+
+public:
+    /**
+     * @param in the stream to read from
+     * @param progress counts the bytes read
+     */
+    progress_istream(std::istream& in, phase_progress& progress) : std::istream(nullptr), buf(in, progress)
+    {
+        rdbuf(&buf);
+    }
+};
+
+/** @brief an output stream that writes to another stream and counts the bytes written (see progress_streambuf) */
+class progress_ostream : public std::ostream {
+    progress_streambuf buf; // passes the bytes through
+
+public:
+    /**
+     * @param out the stream to write to
+     * @param progress counts the bytes written
+     */
+    progress_ostream(std::ostream& out, phase_progress& progress) : std::ostream(nullptr), buf(out, progress)
+    {
+        rdbuf(&buf);
+    }
+
+    ~progress_ostream() override { flush(); }
+};
+
+/**
  * @brief ends a logged phase: optionally writes the elapsed time to the measurement
  *        stream mf under the key mf_key (and phase_peak() and phase_allocated() under the keys
- *        peak_<mf_key> and held_<mf_key>), then logs the runtime and resets the timer
+ *        peak_<phase> and held_<phase>, where <phase> is mf_key without the prefix "time_"), then logs the runtime
+ *        and resets the timer
  * @param log whether logging is enabled
  * @param time phase timer; read for the elapsed time, then reset by log_runtime
  * @param mf measurement-file stream (nullptr => nothing written)
@@ -717,9 +842,11 @@ inline void log_phase_end(bool log, std::chrono::steady_clock::time_point& time,
 {
     if (log) {
         if (!mf_key.empty() && mf != nullptr) {
+            constexpr std::string_view time_prefix = "time_";
+            const std::string phase = mf_key.starts_with(time_prefix) ? mf_key.substr(time_prefix.size()) : mf_key;
             *mf << " " << mf_key << "=" << time_diff_ns(time, now());
-            *mf << " peak_" << mf_key << "=" << phase_peak();
-            *mf << " held_" << mf_key << "=" << phase_allocated();
+            *mf << " peak_" << phase << "=" << phase_peak();
+            *mf << " held_" << phase << "=" << phase_allocated();
         }
 
         note_peak();
@@ -738,6 +865,25 @@ inline void log_peak_memory_usage(const std::string& label, uint64_t peak_bytes,
     log_out() << label << ": " << format_size(peak_bytes);
     if (input_bytes != 0) log_out() << " (" << format_percentage(peak_bytes, input_bytes) << " of the input)";
     log_out() << std::endl;
+}
+
+/**
+ * @brief logs the start of a run: "<action> <input> (<size>) with <p> threads[, <parameters>]" and, if path_output is
+ *        not empty, "output: <path_output>"
+ * @param action what is done to the input, e.g. "compressing"
+ * @param input the input, e.g. its path
+ * @param input_bytes the size of the input in bytes
+ * @param threads the number of threads
+ * @param parameters the parameters as "<option> = <value>[ <unit>]", separated by ", " (empty: none)
+ * @param path_output the path of the output file (empty: none)
+ */
+inline void log_run_start(const std::string& action, const std::string& input, uint64_t input_bytes, uint64_t threads,
+    const std::string& parameters = "", const std::string& path_output = "")
+{
+    log_out() << action << " " << input << " (" << format_size(input_bytes) << ") with " << format_threads(threads);
+    if (!parameters.empty()) log_out() << ", " << parameters;
+    log_out() << std::endl;
+    if (!path_output.empty()) log_out() << "output: " << path_output << std::endl;
 }
 
 // the value of the peak memory usage passed to log_construction_summary if it was not measured
