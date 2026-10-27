@@ -513,8 +513,8 @@ inline constexpr auto ignore_block = [](const char*, uint64_t, uint64_t) {};
  * @tparam fnc_t type of the block function
  * @param path path of the file
  * @param size number of bytes to read
- * @param into buffer of at least size bytes to read into, or nullptr to read each block into the same
- *        temporary buffer of block_size bytes
+ * @param into buffer of at least size bytes to read into (its pages are first placed on the NUMA nodes of the threads,
+ *        see place_pages_on_threads), or nullptr to read each block into the same temporary buffer of block_size bytes
  * @param process function called as process(data, length, offset) for each block
  * @param block_size size of a block in bytes
  * @param prog counts the bytes read (see phase_progress)
@@ -531,6 +531,7 @@ inline bool read_file_in_blocks(const std::string& path, uint64_t size, char* in
     // the temporary buffer (if into is nullptr): min(block_size, max(size, 1)) bytes, the current block
     no_init_vector<char> block_buffer;
     if (into == nullptr) resize_no_init(block_buffer, std::min<uint64_t>(block_size, std::max<uint64_t>(size, 1)));
+    else place_pages_on_threads(into, size);
     const uint64_t block_len = into == nullptr ? block_buffer.size() : block_size;
     uint64_t pos = 0;
 

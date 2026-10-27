@@ -142,7 +142,11 @@ enum run_data_section : uint64_t {
     // compressed: [0..ceil(r / lcp_values_per_block)-1] the offset in bytes of block b in section_lcp_blocks
     // (lcp_block_offset_bits bits each)
     section_lcp_block_index,
-    first_extra_section // the smallest identifier of a section added by a caller
+    first_extra_section, // the smallest identifier of a section added by a caller
+    /* the largest identifier, added by a caller whose text consists of the bytes of a file mapped to symbols (see
+       byte_map): the symbol s of the smallest byte (64 bits), then [0..sigma-1] the distinct bytes in increasing order
+       (one byte each); the BWT symbol s + i stands for the byte at index i */
+    section_byte_map = std::numeric_limits<uint64_t>::max()
 };
 
 // an entry of the table of contents of the runs file (see ext_runs)

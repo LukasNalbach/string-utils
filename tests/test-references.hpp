@@ -72,6 +72,19 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
         for (uint64_t i = 0; i < input_size; i++)
             contains_uchar[symbol_bit_pattern(input[i])] = 1;
 
+        uint64_t sigma = 0;
+        for (uint16_t c = 0; c < 256; c++) sigma += contains_uchar[c];
+
+        // all 256 bytes and the sentinel do not fit into one byte: the bytes are sorted as wider symbols
+        if (sigma == 256) {
+            std::vector<int32_t> wide(input_size);
+
+            #pragma omp parallel for num_threads(num_threads)
+            for (uint64_t i = 0; i < input_size; i++) wide[i] = int32_t(symbol_bit_pattern(input[i]));
+
+            return compute_reference_sa<int32_t, std::vector<int32_t>>(std::move(wide), input_size, num_threads);
+        }
+
         /* if the input contains a 0-byte, remap the occurring bytes to 1, 2, ... in increasing order (this does
            not change the suffix array), so that only the sentinel is 0 */
         if (contains_uchar[0]) {

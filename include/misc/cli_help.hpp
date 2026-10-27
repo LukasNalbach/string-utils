@@ -68,6 +68,9 @@ inline constexpr std::string_view threads_values = "integer >= 1 (default: all C
 // the first byte of a FASTA file (the start of its first header line)
 inline constexpr char fasta_header_start = '>';
 
+// the symbols kept verbatim in the FASTA mode if -A is not given (see help_printer::option_fasta_alphabet)
+inline constexpr std::string_view fasta_default_alphabet = "ACGT";
+
 /**
  * @brief formats a default value for a help, as an output stream writes it (e.g. 1, 0.05)
  * @param value the value
@@ -159,6 +162,13 @@ public:
         option("-fasta <mode>", "on | off | auto (default: auto)", explanation + "\nauto: on for files that start "
             "with '" + std::string(1, fasta_header_start) + "' and whose first line after the header lines consists of "
             "letters, '*', '-' and '.' only");
+    }
+
+    // prints the option -A <alphabet> of the FASTA mode (see fasta_default_alphabet)
+    void option_fasta_alphabet()
+    {
+        option("-A <alphabet>", "a string of symbols (default: " + std::string(fasta_default_alphabet) + ")",
+            "in the FASTA mode: the symbols kept verbatim");
     }
 
     /**

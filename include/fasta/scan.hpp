@@ -61,6 +61,9 @@ inline constexpr uint8_t fasta_line_feed = '\n';
 // the byte before the line feed of a Windows line end
 inline constexpr uint8_t fasta_carriage_return = '\r';
 
+// the separator of a fasta_transform if none is given: DEL, which is no letter
+inline constexpr uint8_t fasta_default_separator = 0x7F;
+
 // number of text positions per sample of a FASTA file (see fasta_sample)
 inline constexpr uint64_t fasta_sample_period = uint64_t(1) << 16;
 
@@ -136,7 +139,7 @@ struct fasta_transform {
      * @param separator the byte a header line and a masked run each yield
      * @param to_upper whether body bytes are upper-cased before they are looked up in the alphabet
      */
-    fasta_transform(const std::string& alphabet, uint8_t separator, bool to_upper = true)
+    fasta_transform(const std::string& alphabet, uint8_t separator = fasta_default_separator, bool to_upper = true)
         : separator(separator), to_upper(to_upper)
     {
         for (uint8_t c : alphabet) in_alphabet[c] = 1;

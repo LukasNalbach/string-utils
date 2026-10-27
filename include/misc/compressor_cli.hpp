@@ -52,6 +52,7 @@
 #include <vector>
 
 #include <coding/byte_codes.hpp>
+#include <fasta/position_map.hpp>
 #include <fasta/restore.hpp>
 #include <fasta/split.hpp>
 #include <misc/cli_help.hpp>
@@ -131,9 +132,8 @@ void print_compressor_help(std::ostream& out, const compressor_spec& spec, print
         "(default: <input_file> without " + ending_pattern + ")");
 
     if (spec.ranges) {
-        h.option("-ranges <file>", "a path", "with -d: write only these ranges of the text, one '<position> <length>' "
-            "per line (the first position is 0)" + std::string(spec.fasta ? "; of the sequence text if the file was "
-            "compressed in the FASTA mode" : ""));
+        h.option("-ranges <file>", "a path", "with -d: write only these ranges of the restored file, one '<position> "
+            "<length>' per line (the first position is 0)");
     }
 
     if (with_postcompressor) {
@@ -415,12 +415,50 @@ inline std::vector<extract_range_t> read_ranges_file(const std::string& path)
 }
 
 /**
+ * @brief writes a FASTA file from its FASTA section and the parsing of its sequence text, or ranges of the file
+ * @tparam parsing_t the type of the parsing
+ * @param parsing the parsing of the sequence text; it is accessed only if symbols of the sequence text are written
+ * @param n the length of the sequence text
+ * @param section the FASTA section
+ * @param map nullptr: the whole file is written; else the map of the positions of the file, and ranges are written
+ * @param ranges with a map: the ranges of the file (position, length), with 1 <= length <= map->file_size() - position
+ * @param out the output
+ * @param sibling_file see extract_windows_in_order
+ * @param p the number of threads
+ * @param progress counts the extracted symbols of the sequence text; its total is set to their number
+ */
+template <typename parsing_t>
+void write_fasta(const parsing_t& parsing, uint64_t n, const fasta_section& section, const fasta_position_map* map,
+    const std::vector<extract_range_t>& ranges, fasta_output& out, const std::string& sibling_file, uint64_t p,
+    phase_progress& progress)
+{
+    // the ranges of the sequence text that are extracted
+    const std::vector<extract_range_t> text_ranges = map != nullptr ? map->text_ranges(ranges)
+        : std::vector<extract_range_t>(n > 0 ? 1 : 0, extract_range_t(0, n));
+    uint64_t num_symbols = 0;
+    for (const extract_range_t& range : text_ranges) num_symbols += range.second;
+    progress.set_total(num_symbols);
+
+    if (map != nullptr) {
+        fasta_range_writer writer(*map, out, ranges);
+        extract_windows_in_order(parsing, text_ranges, sibling_file, p, progress,
+            [&](const char* symbols, uint64_t length) { writer.append(symbols, length); });
+        writer.finish();
+    } else {
+        fasta_restorer restorer(section, out);
+        extract_windows_in_order(parsing, text_ranges, sibling_file, p, progress,
+            [&](const char* symbols, uint64_t length) { restorer.append(symbols, length); });
+        restorer.finish();
+    }
+}
+
+/**
  * @brief restores the text of a file written by a compressor that stores a parsing (or the ranges of -ranges) into
  *        the output file: decompresses the file with its postcompressor into a temporary file next to the output
  *        file, reads the parsing with decompress() or load() and extracts the text. A compressor with a FASTA mode
  *        stores the mode (text_mode_plain or text_mode_fasta) in the first byte, in the FASTA mode followed by the
  *        FASTA section (see fasta_section) and the parsing of the sequence text, which is empty if nothing follows;
- *        -d restores the FASTA file, -ranges extracts ranges of the sequence text.
+ *        -d restores the FASTA file, -ranges extracts ranges of the FASTA file (see write_fasta).
  * @tparam parsing_t the type of the parsing
  * @param cli the options
  * @param result_algo the value of the key "algo" of the RESULT line (see -m)
@@ -496,8 +534,16 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
 
     const uint64_t n = empty ? 0 : parsing.size();
     if (n == 0 && !fasta) throw std::runtime_error("the text in " + cli.path_input_file + " is empty");
-    // whether the FASTA file is restored
-    const bool restores_fasta = fasta && cli.path_ranges_file.empty();
+    // the map of the positions of the FASTA file, in the FASTA mode with -ranges
+    std::optional<fasta_position_map> map;
+
+    if (fasta && !cli.path_ranges_file.empty()) {
+        map.emplace(*fasta);
+        if (map->text_size() != n) throw invalid_file();
+    }
+
+    // the length of what the ranges refer to: the FASTA file if there is a map, else the text
+    const uint64_t size = map ? map->file_size() : n;
     std::vector<extract_range_t> ranges;
     if (n > 0) ranges = { { 0, n } };
     if (!cli.path_ranges_file.empty()) ranges = read_ranges_file(cli.path_ranges_file);
@@ -505,12 +551,12 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
 
     // cut the ranges at the end of the text (a length of 0 counts as 1)
     for (auto& [position, length] : ranges) {
-        if (position >= n) {
-            throw std::runtime_error("position " + std::to_string(position) + " is past the end of the text (n = "
-                + format_number(n) + ")");
+        if (position >= size) {
+            throw std::runtime_error("position " + std::to_string(position) + " is past the end of the "
+                + (map ? "FASTA file (" + format_number(size) + " bytes)" : "text (n = " + format_number(n) + ")"));
         }
 
-        length = std::min(n - position, std::max<uint64_t>(1, length));
+        length = std::min(size - position, std::max<uint64_t>(1, length));
         if (length > std::numeric_limits<uint64_t>::max() - num_symbols)
             throw std::runtime_error("the requested output is too large");
         num_symbols += length;
@@ -519,17 +565,11 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
     log_phase_start(cli.log, time, "extracting " + format_size(num_symbols));
     phase_progress progress(cli.log, num_symbols);
 
-    if (restores_fasta) {
-        if constexpr (extracts_phrase_by_phrase<parsing_t>) {
-            throw std::runtime_error("the FASTA mode needs a parsing that is extracted window by window");
-        } else {
-            fasta_output out(cli.path_output_file);
-            fasta_restorer restorer(*fasta, out);
-            extract_windows(parsing, ranges, cli.threads, progress,
-                [&](const char* symbols, uint64_t length) { restorer.append(symbols, length); });
-            restorer.finish();
-            out.finish();
-        }
+    if (fasta) {
+        fasta_output out(cli.path_output_file);
+        write_fasta(parsing, n, *fasta, map ? &*map : nullptr, ranges, out, cli.path_output_file, cli.threads,
+            progress);
+        out.finish();
     } else if constexpr (extracts_phrase_by_phrase<parsing_t>) {
         extract_phrases_to_file(parsing, ranges, num_symbols, cli.path_output_file, cli.threads, progress);
     } else {

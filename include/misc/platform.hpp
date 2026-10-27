@@ -60,6 +60,7 @@
 #include <unistd.h>
 
 #include <fstream>
+#include <sstream>
 #endif
 
 // the prefix of the environment variables read by string-utils (<prefix>_TMPDIR, <prefix>_HUGE_PAGES,
@@ -309,6 +310,9 @@ inline constexpr bool has_transparent_huge_pages = false;
 // returns the size of a page in bytes
 uint64_t page_size();
 
+// returns the number of bytes of physical memory available to new allocations (0 if it is unknown)
+uint64_t available_memory();
+
 // advises the kernel to use (use = true) or not to use huge pages for a range of whole pages
 inline void advise_huge_pages(void*, uint64_t, bool) {}
 
@@ -358,6 +362,23 @@ inline constexpr bool has_transparent_huge_pages = true;
 
 // returns the size of a page in bytes
 inline uint64_t page_size() { return uint64_t(sysconf(_SC_PAGESIZE)); }
+
+// returns the number of bytes of physical memory available to new allocations, MemAvailable in /proc/meminfo (0 if it
+// is unknown)
+inline uint64_t available_memory()
+{
+    std::ifstream meminfo("/proc/meminfo");
+
+    // a line "<name>: <value> kB"
+    for (std::string line; std::getline(meminfo, line);) {
+        std::istringstream fields(line);
+        std::string name;
+        uint64_t kib = 0;
+        if (fields >> name >> kib && name == "MemAvailable:") return kib * 1024;
+    }
+
+    return 0;
+}
 
 // advises the kernel to use (use = true) or not to use transparent huge pages for a range of whole pages (madvise)
 inline void advise_huge_pages(void* data, uint64_t bytes, bool use)
