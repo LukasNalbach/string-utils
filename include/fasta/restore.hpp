@@ -150,6 +150,8 @@ private:
     bool started = false; // whether the header line of the current record has been written
     bool decoded = false; // whether the start of the lines of the current record has been decoded
     uint64_t width = 0; // W, if the lines of the current record are regular and L > 0 (else 0)
+    // the number of bytes of the sequence of the current record that have not been written, if its lines are regular
+    uint64_t sequence_left = 0;
     uint64_t runs_left = 0; // the number of runs of the current record that have not been decoded
     uint64_t run_length = 0; // the line length of the current run
     uint64_t lines_left = 0; // the number of lines of the current run that have not been written
@@ -177,10 +179,10 @@ private:
         decoded = false;
     }
 
-    // decodes the start of the lines of the current record (nonempty: whether L > 0)
-    void decode_lines(bool nonempty)
+    // decodes the start of the lines of the current record
+    void decode_lines()
     {
-        width = layout_coder.decode_start(layout, nonempty, runs_left);
+        width = layout_coder.decode_start(layout, sequence_left, runs_left);
         lines_left = 0;
         column = 0;
         decoded = true;
@@ -189,6 +191,11 @@ private:
     // writes bytes of the sequence of the current record (without a separator)
     void write_sequence(const char* bytes, uint64_t len)
     {
+        if (width != 0) {
+            if (len > sequence_left) throw invalid_file();
+            sequence_left -= len;
+        }
+
         while (len > 0) {
             if (width == 0 && lines_left == 0) {
                 if (runs_left == 0) throw invalid_file();
@@ -222,6 +229,7 @@ private:
     void end_record()
     {
         if (width != 0) {
+            if (sequence_left > 0) throw invalid_file();
             if (column > 0) write_line_ends(1);
         } else {
             if (column > 0 || (lines_left > 0 && run_length > 0)) throw invalid_file();
@@ -262,7 +270,7 @@ public:
 
         while (pos < len) {
             if (!started) start_record();
-            if (!decoded) decode_lines(T[pos] != line_feed);
+            if (!decoded) decode_lines();
 
             if (T[pos] == line_feed) {
                 end_record();
@@ -286,7 +294,7 @@ public:
         }
 
         if (!started) start_record();
-        if (!decoded) decode_lines(false);
+        if (!decoded) decode_lines();
         end_record();
         if (record != num_records) throw invalid_file();
         if (flags & fasta_missing_final_line_end) out.remove_last(line_end.size());

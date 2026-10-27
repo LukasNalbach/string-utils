@@ -27,12 +27,14 @@
 #ifndef STRING_UTILS_TESTS_TEST_INPUTS_HPP
 #define STRING_UTILS_TESTS_TEST_INPUTS_HPP
 
+#include <coding/byte_codes.hpp>
 #include <misc/repetitive_input.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <vector>
 
@@ -76,6 +78,26 @@ inline inp_t random_repetitive_input(
 
     return generate_repetitive_input<inp_t>(
         random_repetitive_params(size, random), min_sym, max_sym);
+}
+
+/**
+ * @brief draws the alphabet of a random byte text: up to max_small_sigma bytes, up to 256 bytes or all 256 bytes (each
+ *        with probability 1/3), drawn from all byte values
+ * @tparam gen_t random number generator type
+ * @param max_small_sigma the largest size of a small alphabet
+ * @param gen random number generator
+ * @return the distinct bytes of the alphabet in random order
+ */
+template <typename gen_t>
+inline std::vector<uint8_t> random_byte_alphabet(uint64_t max_small_sigma, gen_t& gen)
+{
+    std::vector<uint8_t> bytes(num_byte_values);
+    std::iota(bytes.begin(), bytes.end(), uint8_t(0));
+    std::shuffle(bytes.begin(), bytes.end(), gen);
+    const uint64_t kind = std::uniform_int_distribution<uint64_t>(0, 2)(gen); // 0: small, 1: any size, 2: all bytes
+    const uint64_t max_sigma = kind == 0 ? std::min(max_small_sigma, num_byte_values) : num_byte_values;
+    bytes.resize(kind == 2 ? num_byte_values : std::uniform_int_distribution<uint64_t>(1, max_sigma)(gen));
+    return bytes;
 }
 
 #endif // STRING_UTILS_TESTS_TEST_INPUTS_HPP

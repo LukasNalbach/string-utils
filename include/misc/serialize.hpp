@@ -36,11 +36,13 @@
 #include <vector>
 
 #include <misc/log.hpp>
+#include <misc/threads.hpp>
 
 // ############################# CHUNKED STREAM I/O #############################
 
 /**
- * @brief reads size bytes from the input stream into data, in chunks that fit into a 32-bit signed integer
+ * @brief reads size bytes from the input stream into data, in chunks that fit into a 32-bit signed integer; the pages
+ *        of data are first placed on the NUMA nodes of the threads (see place_pages_on_threads)
  * @param in the input stream
  * @param data the destination buffer (must hold at least size bytes)
  * @param size the number of bytes to read
@@ -49,6 +51,7 @@
 inline void read_in_chunks(std::istream& in, char* data, uint64_t size,
     phase_progress* prog = nullptr)
 {
+    place_pages_on_threads(data, size);
     uint64_t size_left = size;
     uint64_t bytes_to_read;
     const uint64_t chunk = prog == nullptr ? uint64_t(INT_MAX) : 16 * 1024 * 1024;

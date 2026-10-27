@@ -7,14 +7,17 @@ large strings and integer arrays, together with the third-party libraries they u
   progress, measurement files, parallel sorting (ips4o, ips2ra), packed 24- to 56-bit integers, hashing, memory and
   thread helpers, a platform layer for Linux and Windows, and helpers for command-line tools.
 - [include/rlbwt/](include/rlbwt/): the runs file of a run-length encoded BWT with SA and LCP samples (a plain and a
-  compressed format), its writer and its readers (sequential, with random access on the disk and in RAM).
-- [include/fasta/](include/fasta/): FASTA files as texts (a parallel scan and a reader of the text), and the split of a
-  FASTA file into its sequences, header lines and line layout and its restoration.
+  compressed format), its writer and its readers (sequential, with random access on the disk and in RAM), and the
+  texts a construction reads: files, FASTA files and texts in memory, with their bytes mapped to symbols that are at
+  least a smallest symbol (the map is stored in the runs file).
+- [include/fasta/](include/fasta/): FASTA files as texts (a parallel scan and a reader of the text), the split of a
+  FASTA file into its sequences, header lines and line layout, its restoration and the map of the positions of the
+  file to its sequence text and back.
 - [include/coding/](include/coding/): a binary arithmetic coder with context mixing and variable-length integers.
 - [include/data_structures/](include/data_structures/): plain and Elias-Fano coded bit vectors with rank and select,
   interleaved bit-aligned vectors, a range minimum query tree and a segmented vector.
-- [tests/](tests/): helpers for tests with random inputs and reference implementations of the suffix array, the LCP
-  array and range minimum queries.
+- [tests/](tests/): helpers for tests with random inputs (also random FASTA files), reference implementations of the
+  suffix array, the LCP array and range minimum queries, and the tests of the FASTA code.
 - [external/](external/): the submodules [sdsl-lite](https://github.com/simongog/sdsl-lite),
   [sux](https://github.com/vigna/sux), [malloc_count](https://github.com/ByteHamster-etc/malloc_count),
   [ips4o](https://github.com/ips4o/ips4o), [ips2ra](https://github.com/ips4o/ips2ra),
@@ -32,7 +35,8 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
-`cmake` downloads the submodules and applies the patches in [patches/](patches/) to them. Only libraries are built.
+`cmake` downloads the submodules and applies the patches in [patches/](patches/) to them. The libraries and the tests
+(`build/tests/test-string-utils`) are built.
 
 ## Usage in CMake
 

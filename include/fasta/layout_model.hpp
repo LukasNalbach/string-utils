@@ -47,7 +47,8 @@ using fasta_line_runs = std::vector<std::pair<uint64_t, uint64_t>>;
  * @brief codes the line layout of the records of a FASTA file. The sequence lines of a record with sequence length
  *        L are regular with a width W >= 1 if there are ceil(L / W) of them and all except the last one have length
  *        W; empty lines at the end of a record are counted separately. Per record: whether its lines are regular
- *        (context: the decision of the previous record); if they are and L > 0, whether W is the width of the
+ *        (context: the decision of the previous record); if they are, whether L is the L of the previous record with
+ *        regular lines (context: the decision of that record), else L, and if L > 0, whether W is the width of the
  *        previous record (context: the decision of the previous record), else W - 1; if they are not, the number of
  *        runs of equal line lengths minus one and each run (length, number of lines minus one); then the number of
  *        empty lines at the end (context: whether the previous record ended with empty lines).
@@ -58,6 +59,8 @@ private:
     static constexpr uint64_t yes_no = 2;
 
     decision_model irregular {yes_no}; // the models of "the lines are not regular"
+    decision_model new_length {yes_no}; // the models of "L is not the L of the previous record with regular lines"
+    integer_model lengths {1}; // the model of L
     decision_model new_width {yes_no}; // the models of "W is not the width of the previous record"
     integer_model widths {1}; // the model of W - 1
     integer_model num_runs {1}; // the model of the number of runs of an irregular record minus one
@@ -65,7 +68,9 @@ private:
     integer_model run_counts {1}; // the model of the number of lines of a run minus one
     integer_model empty_lines {yes_no}; // the models of the number of empty lines at the end of a record
     uint64_t width = 0; // the width of the last record with regular lines and L > 0 (0: none)
+    uint64_t length = 0; // L of the last record with regular lines (0: none)
     bool last_irregular = false; // whether the lines of the previous record are not regular
+    bool last_new_length = false; // whether the last record with regular lines has a new L
     bool last_new_width = false; // whether the previous record has a new width
     bool last_empty_lines = false; // whether the previous record ends with empty lines
 
@@ -106,6 +111,12 @@ public:
         irregular.code(coder, !regular, last_irregular);
         last_irregular = !regular;
 
+        if (regular) {
+            new_length.code(coder, L != length, last_new_length);
+            last_new_length = L != length;
+            if (L != length) length = lengths.code(coder, L, 0);
+        }
+
         if (regular && L > 0) {
             new_width.code(coder, !same, last_new_width);
             last_new_width = !same;
@@ -128,28 +139,32 @@ public:
     }
 
     /**
-     * @brief decodes the start of the lines of a record: whether they are regular and W, or the number of runs
+     * @brief decodes the start of the lines of a record: whether they are regular, L and W, or the number of runs
      * @param coder the decoder
-     * @param nonempty whether L > 0
+     * @param L is set to L if the lines are regular, else to 0
      * @param runs is set to the number of runs if the lines are not regular, else to 0
      * @return W, if the lines are regular and L > 0, else 0
      */
-    uint64_t decode_start(range_decoder& coder, bool nonempty, uint64_t& runs)
+    uint64_t decode_start(range_decoder& coder, uint64_t& L, uint64_t& runs)
     {
         const bool regular = !irregular.code(coder, false, last_irregular);
         last_irregular = !regular;
-        runs = 0;
+        L = runs = 0;
 
-        if (regular && nonempty) {
-            const bool is_new = new_width.code(coder, false, last_new_width);
-            last_new_width = is_new;
-            if (is_new) width = widths.code(coder, 0, 0) + 1;
-            if (width == 0) throw invalid_file();
-            return width;
+        if (!regular) {
+            runs = num_runs.code(coder, 0, 0) + 1;
+            return 0;
         }
 
-        if (!regular) runs = num_runs.code(coder, 0, 0) + 1;
-        return 0;
+        last_new_length = new_length.code(coder, false, last_new_length);
+        if (last_new_length) length = lengths.code(coder, 0, 0);
+        L = length;
+        if (L == 0) return 0;
+        const bool is_new = new_width.code(coder, false, last_new_width);
+        last_new_width = is_new;
+        if (is_new) width = widths.code(coder, 0, 0) + 1;
+        if (width == 0) throw invalid_file();
+        return width;
     }
 
     /**

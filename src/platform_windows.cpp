@@ -295,6 +295,13 @@ uint64_t platform::page_size()
     return info.dwPageSize;
 }
 
+uint64_t platform::available_memory()
+{
+    MEMORYSTATUSEX status {};
+    status.dwLength = sizeof(status);
+    return GlobalMemoryStatusEx(&status) ? uint64_t(status.ullAvailPhys) : 0;
+}
+
 bool platform::enable_large_pages()
 {
     static const bool enabled = [] {

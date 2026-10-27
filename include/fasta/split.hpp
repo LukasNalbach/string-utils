@@ -36,6 +36,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -44,7 +46,10 @@
 #include <fasta/header_model.hpp>
 #include <fasta/layout_model.hpp>
 #include <fasta/scan.hpp>
+#include <misc/files.hpp>
 #include <misc/log.hpp>
+#include <misc/memory.hpp>
+#include <misc/threads.hpp>
 
 // the first byte of a compressed file of a compressor with a FASTA mode: the text is stored as it is, or as a FASTA
 // file split into its parts (see fasta_section)
@@ -338,6 +343,77 @@ inline fasta_parts split_fasta(open_fnc_t open, uint64_t num_threads, bool log,
 
         crlf = all_crlf;
     }
+}
+
+/**
+ * @brief reads ranges of the sequence text of a FASTA file (see split_fasta) block by block; each thread has its own
+ */
+class alignas(cache_line_bytes) fasta_text_block_reader {
+private:
+    std::optional<fasta_text_reader<direct_reader>> reader; // the reader of the sequence text
+    no_init_vector<uint8_t> buffer; // the current block
+
+public:
+    // returns whether the FASTA file is open
+    bool is_open() const { return reader.has_value(); }
+
+    /**
+     * @brief opens the FASTA file
+     * @param path the path of the FASTA file
+     * @param parts its parts (they must stay valid while the reader is used)
+     * @param block the number of symbols of a block
+     */
+    void open(const std::string& path, const fasta_parts& parts, uint64_t block)
+    {
+        reader.emplace(direct_reader(path), parts.transform, parts.text.samples.data(), parts.text.samples.size());
+        resize_no_init(buffer, block);
+    }
+
+    /**
+     * @brief reads the symbols [first, to) of the sequence text block by block
+     * @param first the first position
+     * @param to the position after the last one
+     * @param process called as process(symbols, length) with each block
+     */
+    template <typename process_fnc_t>
+    void for_each_block(uint64_t first, uint64_t to, process_fnc_t process)
+    {
+        for (uint64_t pos = first; pos < to; pos += buffer.size()) {
+            const uint64_t len = std::min<uint64_t>(buffer.size(), to - pos);
+            reader->read(pos, len, buffer.data());
+            process(buffer.data(), len);
+        }
+    }
+};
+
+/**
+ * @brief writes the sequence text of a FASTA file (see split_fasta) to a file; each thread writes a range of it
+ * @param path_fasta the path of the FASTA file
+ * @param parts its parts
+ * @param path the path of the file the sequence text is written to
+ * @param num_threads the number of threads
+ */
+inline void write_fasta_text(const std::string& path_fasta, const fasta_parts& parts, const std::string& path,
+    uint64_t num_threads)
+{
+    const uint64_t n = parts.text.text_size;
+    direct_positioned_file out(path, n);
+
+    run_on_threads(num_threads, [&](uint64_t t, uint64_t p) {
+        const uint64_t first = n * t / p;
+        const uint64_t to = n * (t + 1) / p;
+        if (first >= to) return;
+        fasta_text_block_reader reader;
+        reader.open(path_fasta, parts, std::min(to - first, huge_page_bytes));
+        uint64_t pos = first;
+
+        reader.for_each_block(first, to, [&](const uint8_t* symbols, uint64_t len) {
+            out.write(reinterpret_cast<const char*>(symbols), len, pos);
+            pos += len;
+        });
+    });
+
+    if (!out.close_file()) throw std::runtime_error("cannot write " + path);
 }
 
 #endif // STRING_UTILS_FASTA_SPLIT_HPP

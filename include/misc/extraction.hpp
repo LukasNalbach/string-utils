@@ -50,6 +50,7 @@
 #include <misc/files.hpp>
 #include <misc/log.hpp>
 #include <misc/platform.hpp>
+#include <misc/temp_files.hpp>
 #include <misc/utils.hpp>
 
 // number of symbols that are extracted into memory and written at once (not used by the phrase-wise extraction)
@@ -596,6 +597,41 @@ void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t
 
             write(window.data(), window_length);
             progress.advance(window_length);
+        }
+    }
+}
+
+/**
+ * @brief extracts ranges of the text and passes them window by window in their order to a function (see
+ *        extract_windows); a parsing that is extracted phrase by phrase (see extracts_phrase_by_phrase) is extracted
+ *        into a temporary file first, which is then read window by window
+ * @tparam parsing_t type of the parsing
+ * @param parsing the parsing
+ * @param ranges the ranges (position, length), with 1 <= length <= n - position
+ * @param sibling_file the temporary file is created in the directory of this file (see temporary_file_path)
+ * @param p the number of threads
+ * @param progress counts the extracted symbols
+ * @param write called as write(symbols, length) for each window
+ */
+template <typename parsing_t, typename write_fnc_t>
+void extract_windows_in_order(const parsing_t& parsing, const std::vector<extract_range_t>& ranges,
+    const std::string& sibling_file, uint64_t p, phase_progress& progress, write_fnc_t write)
+{
+    if constexpr (!extracts_phrase_by_phrase<parsing_t>) {
+        extract_windows(parsing, ranges, p, progress, write);
+    } else {
+        uint64_t num_symbols = 0;
+        for (const extract_range_t& range : ranges) num_symbols += range.second;
+        if (num_symbols == 0) return;
+        temporary_files tmp_files;
+        const std::string path = temporary_file_path("extracted-text-", sibling_file);
+        tmp_files.paths = { path };
+        extract_phrases_to_file(parsing, ranges, num_symbols, path, p, progress);
+        direct_reader in(path);
+
+        for (uint64_t window_beg = 0; window_beg < num_symbols; window_beg += extract_window_length) {
+            const uint64_t window_end = std::min(num_symbols, window_beg + extract_window_length);
+            write(reinterpret_cast<const char*>(in.read(window_beg, window_end)), window_end - window_beg);
         }
     }
 }
