@@ -35,8 +35,8 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
-`cmake` downloads the submodules and applies the patches in [patches/](patches/) to them. The libraries and the tests
-(`build/tests/test-string-utils`) are built.
+`cmake` downloads the submodules and applies the patches in [patches/](patches/) to them. The libraries are built, the
+tests (`build/tests/test-string-utils`) only with `-DSTRING_UTILS_BUILD_TESTS=ON`.
 
 ## Usage in CMake
 
@@ -86,7 +86,6 @@ The options and environment variables start with the prefix of the top-level pro
 | Environment variable | Description |
 | --- | --- |
 | `<prefix>_TMPDIR` | the directory of the temporary files (default: the temporary directory of the system) |
-| `<prefix>_HUGE_PAGES` | `0`: no advice, below 0: no huge pages, else (default): huge pages for large allocations |
 | `<prefix>_TEST_SECONDS`, `<prefix>_TEST_ITERATIONS` | the maximum time in seconds (default 10) and number of random inputs (default 1000) per tested function |
 | `<prefix>_TEST_SEED` | repeats the random inputs of the seed that a failed test printed |
 

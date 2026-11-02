@@ -150,10 +150,14 @@ if(PROJECT_IS_TOP_LEVEL)
     add_dependencies(string_utils_libraries string_utils_sort)
   endif()
 
-  include(GoogleTest)
-  enable_testing()
-  string_utils_add_executable(test-string-utils tests/test-string-utils.cpp "${CMAKE_BINARY_DIR}/tests/"
-    string_utils_test)
-  set_target_properties(test-string-utils PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
-  gtest_discover_tests(test-string-utils)
+  option(STRING_UTILS_BUILD_TESTS "Build the tests" OFF)
+
+  if(STRING_UTILS_BUILD_TESTS)
+    include(GoogleTest)
+    enable_testing()
+    string_utils_add_executable(test-string-utils tests/test-string-utils.cpp "${CMAKE_BINARY_DIR}/tests/"
+      string_utils_test)
+    set_target_properties(test-string-utils PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    gtest_discover_tests(test-string-utils)
+  endif()
 endif()

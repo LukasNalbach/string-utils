@@ -316,16 +316,13 @@ int run_compressor_cli(int argc, char** argv, const compressor_spec& spec, print
 }
 
 /**
- * @brief logs the size of the output file of a compressor and the compression ratio:
- *        "output size: <size>" and "compression ratio = <input_bytes / output_bytes>"
+ * @brief logs the size of the output file of a compressor: "output size: <size> (<share> of the input)"
  * @param output_bytes the size of the output file in bytes
  * @param input_bytes the size of the input file in bytes
  */
 inline void log_compression_ratio(uint64_t output_bytes, uint64_t input_bytes)
 {
-    log_out() << "output size: " << format_size(output_bytes) << std::endl;
-    log_out() << "compression ratio = " << format_ratio(input_bytes / (double) std::max<uint64_t>(1, output_bytes))
-              << std::endl;
+    log_output_size("output", output_bytes, input_bytes);
 }
 
 /** @brief the time, the peak memory usage and the setting of a post-compression */
@@ -452,19 +449,32 @@ void write_fasta(const parsing_t& parsing, uint64_t n, const fasta_section& sect
     }
 }
 
+/** @brief how a compressor stores its parsing in the file (see decompress_parsing) */
+enum class parsing_storage {
+    compressed, // as written by compress(), read with decompress(in, threads)
+    serialized // as it is in memory (written by serialize()), read with load()
+};
+
+// how a parsing of type parsing_t is stored by default: compressed if parsing_t has decompress(), else serialized
+template <typename parsing_t>
+inline constexpr parsing_storage default_parsing_storage
+    = (requires(parsing_t& x, direct_ifstream& in, uint64_t threads) { x.decompress(in, threads); })
+        ? parsing_storage::compressed : parsing_storage::serialized;
+
 /**
  * @brief restores the text of a file written by a compressor that stores a parsing (or the ranges of -ranges) into
  *        the output file: decompresses the file with its postcompressor into a temporary file next to the output
- *        file, reads the parsing with decompress() or load() and extracts the text. A compressor with a FASTA mode
- *        stores the mode (text_mode_plain or text_mode_fasta) in the first byte, in the FASTA mode followed by the
- *        FASTA section (see fasta_section) and the parsing of the sequence text, which is empty if nothing follows;
- *        -d restores the FASTA file, -ranges extracts ranges of the FASTA file (see write_fasta).
+ *        file, reads the parsing with decompress() or load() (see storage) and extracts the text. A compressor with a
+ *        FASTA mode stores the mode (text_mode_plain or text_mode_fasta) in the first byte, in the FASTA mode followed
+ *        by the FASTA section (see fasta_section) and the parsing of the sequence text, which is empty if nothing
+ *        follows; -d restores the FASTA file, -ranges extracts ranges of the FASTA file (see write_fasta).
  * @tparam parsing_t the type of the parsing
+ * @tparam storage how the file stores the parsing
  * @param cli the options
  * @param result_algo the value of the key "algo" of the RESULT line (see -m)
  * @param with_mode whether the file starts with the mode (the compressor has a FASTA mode)
  */
-template <typename parsing_t>
+template <typename parsing_t, parsing_storage storage = default_parsing_storage<parsing_t>>
 void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, bool with_mode = false)
 {
     std::error_code ec;
@@ -483,10 +493,8 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
     std::optional<fasta_section> fasta; // the FASTA section, in the FASTA mode
     bool empty = false; // whether the file stores no parsing (an empty sequence text in the FASTA mode)
 
-    // true <=> parsing_t has no decompress(), i.e., the file stores the serialized parsing
-    constexpr bool loads = !requires(parsing_t& x, direct_ifstream& in, uint64_t threads) {
-        x.decompress(in, threads);
-    };
+    // true <=> the file stores the serialized parsing
+    constexpr bool loads = storage == parsing_storage::serialized;
 
     {
         temporary_files tmp_files;

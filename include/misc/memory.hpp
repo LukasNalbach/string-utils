@@ -213,10 +213,8 @@ inline constexpr uint64_t min_huge_page_advice_bytes = 4 * 1024 * 1024;
 inline constexpr uint64_t huge_page_bytes = uint64_t(1) << 21;
 
 /**
- * @brief advises the kernel to use huge pages for a memory range of at least min_bytes bytes (does nothing without
- *        platform::has_transparent_huge_pages). The environment variable <prefix>_HUGE_PAGES changes the advice at run
- *        time: unset or > 0: use huge pages (MADV_HUGEPAGE), 0: no advice, < 0: do not use huge pages
- *        (MADV_NOHUGEPAGE).
+ * @brief advises the kernel to use huge pages (MADV_HUGEPAGE) for a memory range of at least min_bytes bytes (does
+ *        nothing without platform::has_transparent_huge_pages)
  * @param data start of the range
  * @param bytes size of the range in bytes
  * @param min_bytes smallest range that is advised
@@ -226,18 +224,13 @@ inline void advise_huge_pages([[maybe_unused]] void* data, [[maybe_unused]] uint
 {
 #if STRING_UTILS_HUGE_PAGES
     if constexpr (!platform::has_transparent_huge_pages) return;
-    static const int mode = [] {
-        const char* value = std::getenv(STRING_UTILS_ENV_PREFIX "_HUGE_PAGES");
-        return value == nullptr ? 1 : std::atoi(value);
-    }();
-
-    if (mode == 0 || bytes < min_bytes) return;
+    if (bytes < min_bytes) return;
 
     // extend the range to page boundaries
     uint64_t page = platform::page_size();
     uintptr_t beg = uintptr_t(data) & ~(page - 1);
     uintptr_t end = (uintptr_t(data) + bytes + page - 1) & ~(page - 1);
-    platform::advise_huge_pages(reinterpret_cast<void*>(beg), end - beg, mode > 0);
+    platform::advise_huge_pages(reinterpret_cast<void*>(beg), end - beg, true);
 #endif
 }
 

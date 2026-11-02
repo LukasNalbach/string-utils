@@ -45,12 +45,20 @@
 
 #include <misc/parse.hpp>
 #include <misc/platform.hpp>
+#include <misc/temp_files.hpp>
+
+// the tests write their temporary files to a RAM disk, if there is one (see temporary_files_on_ram_disk)
+inline const bool test_files_on_ram_disk = (temporary_files_on_ram_disk = true);
 
 // default number of random inputs a test validates (see fuzz_iterations)
 inline constexpr uint64_t default_fuzz_iterations = 1000;
 
 // default maximum time in seconds one functionality is fuzzed (see fuzz_seconds)
 inline constexpr double default_fuzz_seconds = 10.0;
+
+// number of threads that run a parallel functionality (see run_fuzz): the number of threads of OpenMP at the start of
+// the process, which a construction may change with omp_set_num_threads
+inline const int fuzz_num_threads = omp_get_max_threads();
 
 /**
  * @brief returns the maximum number of random inputs a test validates (see run_fuzz), overridable via
@@ -227,7 +235,7 @@ inline void run_fuzz(
                 std::atomic<uint64_t> finished { 0 };
                 const uint64_t first = done;
 
-                #pragma omp parallel for schedule(dynamic)
+                #pragma omp parallel for num_threads(fuzz_num_threads) schedule(dynamic)
                 for (int64_t iteration = 0; iteration < (int64_t) batch; iteration++) {
                     functionality.run(first + (uint64_t) iteration);
                     const uint64_t reached = first + finished.fetch_add(1) + 1;
@@ -271,6 +279,8 @@ inline void run_fuzz(
                     / std::max(per_input, min_time_per_input)), 1, max_batch_size);
             }
 
+            // a batch of a parallel functionality has at least one input per thread
+            if (functionality.parallel) batch = std::max<uint64_t>(batch, fuzz_num_threads);
             batch = std::min(batch, target - done);
             run_batch(std::max<uint64_t>(1, batch));
 

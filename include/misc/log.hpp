@@ -51,8 +51,19 @@
 // the stream the log functions write to: std::cout, or std::cerr if std::cout carries the output of a tool
 inline std::ostream* log_stream = &std::cout;
 
-// returns the stream the log functions write to
-inline std::ostream& log_out() { return *log_stream; }
+// prints the line of the items logged with log_grouped, if there are any (defined below)
+inline void flush_log_group();
+
+// returns the stream the log functions write to; first prints the pending line of log_grouped
+inline std::ostream& log_out()
+{
+    flush_log_group();
+    return *log_stream;
+}
+
+// whether the last line written by the log functions is empty or a block title (or nothing has been written yet), see
+// log_empty_line and log_block_begin
+inline bool log_last_line_empty = true;
 
 // returns the current time point of the steady clock
 static std::chrono::steady_clock::time_point now() { return std::chrono::steady_clock::now(); }
@@ -137,9 +148,16 @@ inline std::string format_ratio(double value)
     std::ostringstream str;
     str << std::fixed << std::setprecision(ratio_decimals) << value;
     std::string formatted = str.str();
-    if (formatted.find('.') == std::string::npos) return formatted;
-    while (formatted.back() == '0') formatted.pop_back();
-    if (formatted.back() == '.') formatted.pop_back();
+
+    if (formatted.find('.') != std::string::npos) {
+        while (formatted.back() == '0') formatted.pop_back();
+        if (formatted.back() == '.') formatted.pop_back();
+    }
+
+    // thousands separators in the integer part, as in format_number
+    const uint64_t digits_beg = formatted.front() == '-' ? 1 : 0;
+    const uint64_t digits_end = std::min(formatted.find('.'), formatted.size());
+    for (uint64_t i = digits_end; i > digits_beg + 3; i -= 3) formatted.insert(i - 3, ",");
     return formatted;
 }
 
@@ -174,11 +192,23 @@ inline std::string format_number(uint64_t value)
 }
 
 /**
+ * @brief formats a count with its noun
+ * @param count the count
+ * @param noun the noun in the singular, e.g. "sequence"
+ * @param plural the noun in the plural (empty: noun + "s")
+ * @return "1 <noun>" or "<count> <plural>"
+ */
+inline std::string format_count(uint64_t count, const std::string& noun, const std::string& plural = "")
+{
+    return format_number(count) + " " + (count == 1 ? noun : plural.empty() ? noun + "s" : plural);
+}
+
+/**
  * @brief formats a number of threads
  * @param p the number of threads
  * @return "1 thread" or "<p> threads"
  */
-inline std::string format_threads(uint64_t p) { return p == 1 ? "1 thread" : format_number(p) + " threads"; }
+inline std::string format_threads(uint64_t p) { return format_count(p, "thread"); }
 
 /**
  * @brief formats a size in bytes with an appropriate unit (B, KB, MB or GB)
@@ -207,8 +237,6 @@ inline std::string format_size(uint64_t B)
 // size in bytes of the data structure whose components are being listed (0 if no listing is in progress);
 // set by begin_listing and reset to 0 by end_listing (see format_share)
 inline uint64_t listing_total = 0;
-// sum of the sizes in bytes of the components listed with log_component at depth 0 since begin_listing
-inline uint64_t listing_listed = 0;
 // number of levels by which log_component indents the components in addition to their depth (e.g. 1 for the
 // components listed under a heading)
 inline uint64_t listing_indent = 0;
@@ -239,8 +267,37 @@ inline bool begin_listing(uint64_t total)
 {
     if (listing_total != 0) return false;
     listing_total = std::max<uint64_t>(total, 1);
-    listing_listed = 0;
     return true;
+}
+
+// the components listed below a heading whose size is the sum of their sizes (see begin_component_group)
+struct component_group_t {
+    std::string title; // the heading; empty: no group is open
+    uint64_t bytes = 0; // the sum of the sizes of the components of the group at the first level below the heading
+    std::string lines; // the lines of the components of the group
+};
+
+inline component_group_t component_group;
+
+// prints the heading of the open group of components with their total size, followed by their lines, and closes it
+inline void end_component_group()
+{
+    if (component_group.title.empty()) return;
+    log_out() << component_group.title << ": " << format_share(component_group.bytes) << '\n' << component_group.lines;
+    log_last_line_empty = false;
+    component_group = component_group_t();
+}
+
+/**
+ * @brief starts a group of components below a heading (and ends the open one): the components logged at a level > 0
+ *        (depth plus listing_indent) up to the next component at level 0, the next group or end_listing are printed
+ *        below the line "<title>: <size> (<share> %)", whose size is the sum of the components at level 1
+ * @param title the heading, e.g. "forward index"
+ */
+inline void begin_component_group(const std::string& title)
+{
+    end_component_group();
+    component_group.title = title;
 }
 
 /**
@@ -252,18 +309,31 @@ inline bool begin_listing(uint64_t total)
  */
 inline void log_component(const std::string& name, uint64_t bytes, uint64_t depth = 0)
 {
-    log_out() << std::string(2 * (depth + listing_indent), ' ') << name << ": " << format_share(bytes) << '\n';
-    if (depth == 0) listing_listed += bytes;
+    const uint64_t level = depth + listing_indent;
+    const std::string line = std::string(2 * level, ' ') + name + ": " + format_share(bytes) + "\n";
+
+    // a component below the heading of the open group belongs to it, one at level 0 ends it
+    if (!component_group.title.empty()) {
+        if (level > 0) {
+            if (level == 1) component_group.bytes += bytes;
+            component_group.lines += line;
+            return;
+        }
+
+        end_component_group();
+    }
+
+    log_out() << line;
+    log_last_line_empty = false;
 }
 
-// ends a listing started with begin_listing: logs the size not covered by the listed components ("other: ...")
+// ends a listing started with begin_listing
 inline void end_listing()
 {
-    if (listing_total > listing_listed) log_component("other", listing_total - listing_listed);
+    end_component_group();
     listing_indent = 0;
     log_out() << std::flush;
     listing_total = 0;
-    listing_listed = 0;
 }
 
 /**
@@ -286,6 +356,8 @@ inline uint64_t time_diff_ns(std::chrono::steady_clock::time_point t) { return t
 
 // whether the line of a phase started with log_phase_start is open, i.e. its runtime has not been printed yet
 inline bool phase_line_open = false;
+// whether a detail has been appended to the line of the running phase (see log_phase_detail)
+inline bool phase_detail_added = false;
 
 // guards deferred_notes
 inline std::mutex notes_lock;
@@ -296,7 +368,9 @@ inline std::vector<std::string> deferred_notes;
 inline void print_deferred_notes()
 {
     std::lock_guard<std::mutex> guard(notes_lock);
+    if (deferred_notes.empty()) return;
     for (const std::string& note : deferred_notes) log_out() << note << '\n';
+    log_last_line_empty = false;
     deferred_notes.clear();
     log_out().flush();
 }
@@ -315,16 +389,54 @@ inline void log_note(bool log, const std::string& note)
         deferred_notes.push_back(note);
     } else {
         log_out() << note << std::endl;
+        log_last_line_empty = false;
     }
 }
 
 // ends the line of an open phase (before an error message is printed) and prints the deferred notes
 inline void end_phase_line()
 {
-    if (phase_line_open) log_out() << std::endl;
+    if (phase_line_open) {
+        log_out() << std::endl;
+        log_last_line_empty = false;
+    }
+
     phase_line_open = false;
     print_deferred_notes();
 }
+
+/**
+ * @brief writes an empty line that separates two blocks of log lines, unless the last line written by the log
+ *        functions is empty
+ * @param log whether logging is enabled
+ */
+inline void log_empty_line(bool log)
+{
+    if (!log) return;
+    end_phase_line();
+    // the pending line of log_grouped is printed first
+    flush_log_group();
+    if (!log_last_line_empty) log_out() << std::endl;
+    log_last_line_empty = true;
+}
+
+/**
+ * @brief starts a block of log lines, e.g. the phases of a step: an empty line (see log_empty_line) and the title
+ *        followed by a colon
+ * @param log whether logging is enabled
+ * @param title the title of the block, e.g. "building the index"
+ */
+inline void log_block_begin(bool log, const std::string& title)
+{
+    if (!log) return;
+    log_empty_line(true);
+    log_out() << title << ":" << std::endl;
+    // no empty line follows the title directly
+    log_last_line_empty = true;
+}
+
+// ends a block of log lines with an empty line (see log_empty_line)
+inline void log_block_end(bool log) { log_empty_line(log); }
 
 /**
  * @brief logs the runtime between two time points, which ends the line of the phase, and returns the current time
@@ -337,6 +449,7 @@ static std::chrono::steady_clock::time_point log_runtime(std::chrono::steady_clo
 {
     log_out() << ", in ~ " << format_time(time_diff_ns(t1, t2)) << std::endl;
     phase_line_open = false;
+    log_last_line_empty = false;
     if (!deferred_notes.empty()) print_deferred_notes();
     return std::chrono::steady_clock::now();
 }
@@ -357,6 +470,9 @@ inline uint64_t largest_phase_peak = 0;
 // number of bytes allocated at the start of the current peak_scope; phase_peak() and phase_allocated() are
 // relative to it
 inline uint64_t peak_baseline = 0;
+
+// message of the running phase without leading newlines (see log_progress)
+inline std::string running_phase;
 
 // updates largest_phase_peak with the current peak of malloc_count
 inline void note_peak() { largest_phase_peak = std::max(largest_phase_peak, malloc_count_peak()); }
@@ -428,8 +544,6 @@ inline void log_spilled_size(bool log, const std::string& file)
     if (!ec) log_out() << ": " << format_size(bytes) << std::flush;
 }
 
-// message of the running phase without leading newlines (see log_progress)
-inline std::string running_phase;
 // whether the line of the running phase currently shows a progress
 inline bool phase_shows_progress = false;
 
@@ -490,7 +604,13 @@ inline void log_phase_start(bool log, std::chrono::steady_clock::time_point& tim
         phase_shows_progress = false;
         begin_progress(1);
         phase_line_open = !msg.empty() && msg.back() != '\n';
-        log_out() << msg << std::flush;
+        phase_detail_added = false;
+
+        // an empty message starts the phase without output (see log_grouped)
+        if (!msg.empty()) {
+            log_last_line_empty = false;
+            log_out() << msg << std::flush;
+        }
     }
 }
 
@@ -582,6 +702,35 @@ inline void log_progress_done(bool log)
     progress_drawn_width = 0;
     log_out() << '\r' << running_phase << std::string(width, ' ')
               << '\r' << running_phase << std::flush;
+}
+
+/**
+ * @brief appends a detail to the line of the running phase, e.g. " (8 cores with 15 threads)", if the line is open; only
+ *        the first detail of a phase is appended. On a terminal, a drawn progress is removed and drawn again after the
+ *        detail by the next report; else, the detail follows the progress appended to the line so far.
+ * @param log whether logging is enabled
+ * @param detail the detail
+ */
+inline void log_phase_detail(bool log, const std::string& detail)
+{
+    if (!log) return;
+    std::lock_guard<std::mutex> guard(progress_lock);
+    if (phase_detail_added || !phase_line_open) return;
+    phase_detail_added = true;
+
+    if (phase_shows_progress && is_log_terminal()) {
+        // overwrite the progress with the detail and blanks, then return to the end of the message
+        const uint64_t width = progress_drawn_width > running_phase.size() + detail.size()
+            ? progress_drawn_width - running_phase.size() - detail.size() : 0;
+        running_phase += detail;
+        log_out() << '\r' << running_phase << std::string(width, ' ') << '\r' << running_phase << std::flush;
+        progress_drawn_width = 0;
+        phase_shows_progress = false;
+        return;
+    }
+
+    running_phase += detail;
+    log_out() << detail << std::flush;
 }
 
 // the default number of times phase_progress::at reports the progress over a phase
@@ -854,6 +1003,125 @@ inline void log_phase_end(bool log, std::chrono::steady_clock::time_point& time,
     }
 }
 
+// the line of the items logged with log_grouped that is not printed yet
+struct log_group_t {
+    std::string action; // the action of the items, e.g. "storing"; empty: no pending line
+    // the items, each split into its name and its qualifier in parentheses at its end, e.g. ("the samples", "forward")
+    std::vector<std::pair<std::string, std::string>> items;
+    uint64_t bytes = 0; // the total size of the items
+    bool with_size = false; // whether the size is printed
+    uint64_t ns = 0; // the total time of the items in nanoseconds
+};
+
+inline log_group_t log_group;
+
+inline void flush_log_group()
+{
+    if (log_group.action.empty()) return;
+    std::ostream& out = *log_stream;
+    out << log_group.action << " ";
+
+    // consecutive items of the same name are printed once with their qualifiers, e.g. "the samples (forward,
+    // backward)"; then a qualifier is printed once after the last of consecutive items with it, e.g. "the samples,
+    // the offsets (forward)"
+    std::vector<std::pair<std::string, std::string>> merged;
+
+    for (const auto& [name, qualifier] : log_group.items) {
+        if (!merged.empty() && merged.back().first == name && !qualifier.empty() && !merged.back().second.empty())
+            merged.back().second += ", " + qualifier;
+        else merged.emplace_back(name, qualifier);
+    }
+
+    for (uint64_t i = 0; i < merged.size(); i++) {
+        const auto& [name, qualifier] = merged[i];
+        out << (i == 0 ? "" : ", ") << name;
+        if (!qualifier.empty() && (i + 1 == merged.size() || merged[i + 1].second != qualifier))
+            out << " (" << qualifier << ")";
+    }
+
+    if (log_group.with_size) out << ": " << format_size(log_group.bytes);
+    out << ", in ~ " << format_time(log_group.ns) << std::endl;
+    log_last_line_empty = false;
+    log_group = log_group_t();
+}
+
+/**
+ * @brief logs an item of an action, e.g. storing a data structure, in one line with the items of the same action
+ *        logged directly before it: "<action> <item>, <item>, ...[: <total size>], in ~ <total time>"; the line is
+ *        printed before the next other output of the log functions (see log_out); a qualifier in parentheses at the
+ *        end of an item is printed once for consecutive items with it, consecutive items of the same name are
+ *        printed once with their qualifiers, an item equal to the previous one is printed once, and an item with
+ *        another qualifier starts a new line
+ * @param log whether logging is enabled
+ * @param action the action, e.g. "storing"
+ * @param item the item, e.g. "the samples (forward)"
+ * @param bytes the size of the item
+ * @param with_size whether the size is printed
+ * @param ns the time of the item in nanoseconds
+ */
+inline void log_grouped(bool log, const std::string& action, const std::string& item, uint64_t bytes, bool with_size,
+    uint64_t ns)
+{
+    if (!log) return;
+    end_phase_line();
+
+    // splits the qualifier in parentheses off the end of the item
+    const size_t open = item.size() > 1 && item.back() == ')' ? item.rfind(" (") : std::string::npos;
+    std::pair<std::string, std::string> entry = open == std::string::npos
+        ? std::pair<std::string, std::string>(item, std::string())
+        : std::pair<std::string, std::string>(item.substr(0, open), item.substr(open + 2, item.size() - open - 3));
+
+    // another qualifier starts a new line, unless the item has the name of the previous one
+    if (!log_group.items.empty() && log_group.items.back().second != entry.second
+        && log_group.items.back().first != entry.first) flush_log_group();
+
+    if (log_group.action != action) {
+        flush_log_group();
+        log_group.action = action;
+    }
+
+    // an item equal to the previous one is printed once
+    if (log_group.items.empty() || log_group.items.back() != entry) log_group.items.push_back(std::move(entry));
+    log_group.bytes += bytes;
+    log_group.with_size = log_group.with_size || with_size;
+    log_group.ns += ns;
+}
+
+/**
+ * @brief ends a phase started with log_phase_start(log, time, "") and logs it with log_grouped, and writes the
+ *        measurement keys of log_phase_end
+ * @param log whether logging is enabled
+ * @param time the phase timer; set to now
+ * @param message the action and the item, e.g. "storing the samples" (see log_grouped)
+ * @param bytes the size of the item
+ * @param with_size whether the size is printed
+ * @param mf the measurement file (nullptr: none)
+ * @param mf_key the measurement key of the phase (empty: none)
+ * @param logged whether the phase is logged (else only the measurement keys are written)
+ */
+inline void log_grouped_phase_end(bool log, std::chrono::steady_clock::time_point& time, const std::string& message,
+    uint64_t bytes, bool with_size, std::ostream* mf = nullptr, const std::string& mf_key = "", bool logged = true)
+{
+    if (!log) return;
+    const uint64_t ns = time_diff_ns(time, now());
+
+    if (mf != nullptr && !mf_key.empty()) {
+        constexpr std::string_view time_prefix = "time_";
+        const std::string phase = mf_key.starts_with(time_prefix) ? mf_key.substr(time_prefix.size()) : mf_key;
+        *mf << " " << mf_key << "=" << ns << " peak_" << phase << "=" << phase_peak() << " held_" << phase << "="
+            << phase_allocated();
+    }
+
+    note_peak();
+    const size_t space = message.find(' ');
+
+    if (logged)
+        log_grouped(true, message.substr(0, space), space == std::string::npos ? "" : message.substr(space + 1), bytes,
+            with_size, ns);
+
+    time = now();
+}
+
 /**
  * @brief logs "<label>: <peak> (<share> of the input)"
  * @param label the label, e.g. "peak memory usage"
@@ -865,11 +1133,12 @@ inline void log_peak_memory_usage(const std::string& label, uint64_t peak_bytes,
     log_out() << label << ": " << format_size(peak_bytes);
     if (input_bytes != 0) log_out() << " (" << format_percentage(peak_bytes, input_bytes) << " of the input)";
     log_out() << std::endl;
+    log_last_line_empty = false;
 }
 
 /**
- * @brief logs the start of a run: "<action> <input> (<size>) with <p> threads[, <parameters>]" and, if path_output is
- *        not empty, "output: <path_output>"
+ * @brief logs the start of a run: "<action> <input> (<size>)", "<p> threads[, <parameters>]" and, if path_output is
+ *        not empty, "output: <path_output>", followed by an empty line
  * @param action what is done to the input, e.g. "compressing"
  * @param input the input, e.g. its path
  * @param input_bytes the size of the input in bytes
@@ -880,30 +1149,38 @@ inline void log_peak_memory_usage(const std::string& label, uint64_t peak_bytes,
 inline void log_run_start(const std::string& action, const std::string& input, uint64_t input_bytes, uint64_t threads,
     const std::string& parameters = "", const std::string& path_output = "")
 {
-    log_out() << action << " " << input << " (" << format_size(input_bytes) << ") with " << format_threads(threads);
+    log_out() << action << " " << input << " (" << format_size(input_bytes) << ")" << std::endl;
+    log_out() << format_threads(threads);
     if (!parameters.empty()) log_out() << ", " << parameters;
     log_out() << std::endl;
     if (!path_output.empty()) log_out() << "output: " << path_output << std::endl;
+    log_last_line_empty = false;
+    log_empty_line(true);
 }
 
 // the value of the peak memory usage passed to log_construction_summary if it was not measured
 inline constexpr uint64_t peak_not_measured = std::numeric_limits<uint64_t>::max();
 
 /**
- * @brief logs the summary of a construction: "construction time: <time> (<throughput>)" and, if the peak memory usage
- *        was measured, "peak memory usage: <peak> (<share> of the input)"
+ * @brief logs the summary of a construction as a block (see log_block_begin): "<name> built [from <source>]:",
+ *        "construction time: <time> (<throughput>)" and, if the peak memory usage was measured, "peak memory usage:
+ *        <peak> (<share> of the input)"
+ * @param name what was built, e.g. "RLBWT"
  * @param time_ns the construction time in nanoseconds
  * @param input_bytes the size of the input in bytes
  * @param peak_bytes the peak memory usage in bytes (peak_not_measured: not printed)
  * @param with_throughput whether the throughput is printed (not if a part of the construction was read from a cache)
+ * @param source what the construction started from, e.g. "the RLBWT" (empty: the input)
  */
-inline void log_construction_summary(uint64_t time_ns, uint64_t input_bytes, uint64_t peak_bytes,
-    bool with_throughput = true)
+inline void log_construction_summary(const std::string& name, uint64_t time_ns, uint64_t input_bytes,
+    uint64_t peak_bytes, bool with_throughput = true, const std::string& source = "")
 {
+    log_block_begin(true, name + " built" + (source.empty() ? "" : " from " + source));
     log_out() << "construction time: " << format_time(time_ns);
     if (with_throughput && input_bytes != 0) log_out() << " (" << format_throughput(input_bytes, time_ns) << ")";
     log_out() << std::endl;
-    if (peak_bytes != peak_not_measured) log_peak_memory_usage("peak memory usage", peak_bytes, input_bytes);
+    if (peak_bytes != peak_not_measured)
+        log_peak_memory_usage("peak memory usage", peak_bytes, input_bytes);
 }
 
 /**
@@ -916,13 +1193,18 @@ inline void log_output_size(const std::string& name, uint64_t output_bytes, uint
 {
     log_out() << name << " size: " << format_size(output_bytes) << " ("
               << format_percentage(output_bytes, input_bytes) << " of the input)" << std::endl;
+    log_last_line_empty = false;
 }
 
 /**
  * @brief prints a message to the log stream (see log_stream)
  * @param message the message to print
  */
-inline void log_message(std::string message) { log_out() << message << std::flush; }
+inline void log_message(std::string message)
+{
+    if (!message.empty()) log_last_line_empty = false;
+    log_out() << message << std::flush;
+}
 
 /**
  * @brief prints message (without resetting any phase timer), if logging is enabled;
@@ -930,6 +1212,6 @@ inline void log_message(std::string message) { log_out() << message << std::flus
  * @param log whether logging is enabled
  * @param message message to print (include a trailing "\n" for a header line)
  */
-inline void log_message(bool log, const std::string& message) { if (log) log_out() << message << std::flush; }
+inline void log_message(bool log, const std::string& message) { if (log) log_message(message); }
 
 #endif // STRING_UTILS_MISC_LOG_HPP
