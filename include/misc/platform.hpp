@@ -478,6 +478,9 @@ bool set_thread_cpus(const cpu_mask& cpus);
 
 // returns a string that is equal for all CPUs of the same physical core as CPU cpu, and only for them
 std::string core_of_cpu(uint64_t cpu);
+
+// returns the size in bytes of the data or unified cache of a level (1, 2 or 3), or 0 if it cannot be determined
+uint64_t cache_bytes(uint64_t level);
 #else
 // a set of CPUs (cpu_set_t)
 class cpu_mask {
@@ -512,6 +515,15 @@ public:
     cpu_set_t* native() { return &cpus; }
     const cpu_set_t* native() const { return &cpus; }
 };
+
+// returns the size in bytes of the data or unified cache of a level (1, 2 or 3), or 0 if it cannot be determined
+inline uint64_t cache_bytes(uint64_t level)
+{
+    const long bytes = level == 1 ? sysconf(_SC_LEVEL1_DCACHE_SIZE)
+        : level == 2 ? sysconf(_SC_LEVEL2_CACHE_SIZE)
+        : level == 3 ? sysconf(_SC_LEVEL3_CACHE_SIZE) : 0;
+    return bytes > 0 ? uint64_t(bytes) : 0;
+}
 
 // returns the number of online CPUs, or 0 if it cannot be determined
 inline uint64_t num_online_cpus()

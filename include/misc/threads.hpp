@@ -292,7 +292,10 @@ inline std::vector<cpu_node_t> cpu_topology(const platform::cpu_mask& allowed)
  */
 class node_cores {
     platform::cpu_mask _cpus; // one CPU of each reserved core
-    std::vector<uint64_t> _reserved; // the CPUs in _cpus, if they are counted in reservations()
+    std::vector<uint64_t> _reserved; // the first CPU of each reserved core, under which it is counted in reservations()
+    // [0..num_threads()-1] the allowed CPUs of each reserved core, starting with the one in _cpus; empty without
+    // topology information
+    std::vector<cpu_core_t> _cores;
     uint64_t _num_threads = 1; // the number of threads of the task
 
     // returns the number of node_cores in scope that reserved each CPU, by the CPU
@@ -347,15 +350,22 @@ public:
         }
 
         // the cores of the node by increasing number of reservations
-        std::vector<uint64_t> cpus;
-        for (const cpu_core_t& core : *node) cpus.push_back(core.front());
-        std::stable_sort(cpus.begin(), cpus.end(), [&](uint64_t x, uint64_t y) { return reserved[x] < reserved[y]; });
-        _num_threads = std::clamp<uint64_t>(max_threads, 1, cpus.size());
-        _reserved.assign(cpus.begin(), cpus.begin() + _num_threads);
+        std::vector<const cpu_core_t*> cores;
+        for (const cpu_core_t& core : *node) cores.push_back(&core);
+        std::stable_sort(cores.begin(), cores.end(),
+            [&](const cpu_core_t* x, const cpu_core_t* y) { return reserved[x->front()] < reserved[y->front()]; });
+        _num_threads = std::clamp<uint64_t>(max_threads, 1, cores.size());
 
-        for (uint64_t cpu : _reserved) {
-            _cpus.set(cpu);
-            reserved[cpu]++;
+        // the k-th reservation of a core runs on its k-th CPU (modulo the number of its CPUs), so that tasks sharing a
+        // core use its hardware threads
+        for (uint64_t i = 0; i < _num_threads; i++) {
+            const uint64_t first = cores[i]->front();
+            cpu_core_t core = *cores[i];
+            std::rotate(core.begin(), core.begin() + reserved[first] % core.size(), core.end());
+            _reserved.push_back(first);
+            _cpus.set(core.front());
+            _cores.push_back(std::move(core));
+            reserved[first]++;
         }
     }
 
@@ -374,6 +384,10 @@ public:
 
     // returns the number of threads of the task: one per reserved core, or at most one per allowed CPU
     uint64_t num_threads() const { return _num_threads; }
+
+    // returns the allowed CPUs of each reserved core, starting with the one in cpus(); empty without topology
+    // information
+    const std::vector<cpu_core_t>& cores() const { return _cores; }
 };
 
 /**
@@ -430,6 +444,22 @@ inline void rethrow_first_exception(const std::vector<std::exception_ptr>& failu
  * @param num_threads the number of threads requested for the team
  * @param fnc the function run on each thread
  */
+/**
+ * @brief sets the number of threads of the parallel regions without a num_threads clause (omp_set_num_threads) and
+ *        restores the previous number when it is destroyed
+ */
+class omp_threads_scope {
+    int previous; // the number of threads before
+
+public:
+    explicit omp_threads_scope(uint64_t num_threads) : previous(omp_get_max_threads())
+    { omp_set_num_threads(int(num_threads)); }
+
+    ~omp_threads_scope() { omp_set_num_threads(previous); }
+    omp_threads_scope(const omp_threads_scope&) = delete;
+    omp_threads_scope& operator=(const omp_threads_scope&) = delete;
+};
+
 template <typename fnc_t>
 inline void run_on_threads(uint64_t num_threads, fnc_t fnc)
 {

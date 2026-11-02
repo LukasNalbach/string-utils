@@ -402,6 +402,19 @@ bool platform::set_thread_cpus(const cpu_mask& cpus)
     return true;
 }
 
+uint64_t platform::cache_bytes(uint64_t level)
+{
+    uint64_t bytes = 0;
+
+    for_each_processor_record(RelationCache, [&](const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX& record) {
+        const CACHE_RELATIONSHIP& cache = record.Cache;
+        if (cache.Level == level && (cache.Type == CacheData || cache.Type == CacheUnified))
+            bytes = std::max<uint64_t>(bytes, cache.CacheSize);
+    });
+
+    return bytes;
+}
+
 std::string platform::core_of_cpu(uint64_t cpu)
 {
     // [0..c-1] core_index[x] = the index of the core of CPU x, or c if it is not known

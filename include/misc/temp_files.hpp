@@ -27,6 +27,7 @@
 #ifndef STRING_UTILS_MISC_TEMP_FILES_HPP
 #define STRING_UTILS_MISC_TEMP_FILES_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -61,11 +62,19 @@ inline std::string random_alphanumeric_string(uint64_t length)
     return result;
 }
 
+// the RAM disk the tests write their temporary files to, if it exists (see temporary_files_on_ram_disk)
+inline constexpr const char* ram_disk_directory = "/dev/shm";
+
+/* true <=> the temporary files are written to ram_disk_directory, if it is a RAM disk and <prefix>_TMPDIR is not set;
+   set by the tests, whose many small files take most of their time on a disk (see temporary_directory) */
+inline bool temporary_files_on_ram_disk = false;
+
 /**
  * @brief returns the directory for temporary files: the value of the environment variable <prefix>_TMPDIR (see
- *        STRING_UTILS_ENV_PREFIX in misc/platform.hpp) if it is set, else std::filesystem::temp_directory_path()
- *        (TMPDIR or /tmp; on Windows TMP or TEMP); prints a warning (once per process) if the directory lies on a RAM
- *        disk (see platform::is_ram_disk)
+ *        STRING_UTILS_ENV_PREFIX in misc/platform.hpp) if it is set, else ram_disk_directory with
+ *        temporary_files_on_ram_disk, else std::filesystem::temp_directory_path() (TMPDIR or /tmp; on Windows TMP or
+ *        TEMP); prints a warning (once per process) if the directory lies on a RAM disk (see platform::is_ram_disk),
+ *        unless temporary_files_on_ram_disk is set
  * @return the directory
  */
 inline std::filesystem::path temporary_directory()
@@ -76,13 +85,15 @@ inline std::filesystem::path temporary_directory()
 
         if (env != nullptr && env[0] != 0) {
             tmp_dir = std::filesystem::path(env);
+        } else if (temporary_files_on_ram_disk && platform::is_ram_disk(ram_disk_directory)) {
+            tmp_dir = std::filesystem::path(ram_disk_directory);
         } else {
             std::error_code error;
             tmp_dir = std::filesystem::temp_directory_path(error);
             if (error) tmp_dir = std::filesystem::path(platform::fallback_temporary_directory);
         }
 
-        if (platform::is_ram_disk(tmp_dir.string())) {
+        if (!temporary_files_on_ram_disk && platform::is_ram_disk(tmp_dir.string())) {
             std::cerr << "warning: the temporary directory " << tmp_dir.string()
                       << " is a RAM disk (temporary files are stored in memory);"
                       << " set " STRING_UTILS_ENV_PREFIX "_TMPDIR to a directory on a disk" << std::endl;
@@ -96,14 +107,18 @@ inline std::filesystem::path temporary_directory()
 
 /**
  * @brief returns a unique path for a temporary file (the file is not created)
- * @param prefix prefix of the file name; 10 random alphanumeric characters are appended to it
+ * @param prefix prefix of the file name; 10 random alphanumeric characters (which differ between processes) and the
+ *        number of the path among the ones returned in this process (which makes it unique within the process) are
+ *        appended to it
  * @param sibling_file path of a file; the temporary file is placed in its directory, or in the temporary
  *        directory (see temporary_directory) if sibling_file is empty or contains no directory
  * @return the path
  */
 inline std::string temporary_file_path(const std::string& prefix, const std::string& sibling_file = "")
 {
-    const std::string name = prefix + random_alphanumeric_string(10);
+    static std::atomic<uint64_t> num_paths = 0; // the number of paths returned in this process
+    const std::string name = prefix + random_alphanumeric_string(10) + "-"
+        + std::to_string(num_paths.fetch_add(1, std::memory_order_relaxed));
     const std::filesystem::path dir = sibling_file.empty()
         ? std::filesystem::path() : std::filesystem::path(sibling_file).parent_path();
     return (dir.empty() ? temporary_directory() / name : dir / name).string();

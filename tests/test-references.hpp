@@ -112,7 +112,7 @@ inline std::vector<int64_t> compute_reference_sa(inp_t input, uint64_t input_siz
         no_init_vector<usym_t> alphabet;
         resize_no_init(alphabet, input_size);
         for (uint64_t i = 0; i < input_size; i++) alphabet[i] = usym_t(symbol_bit_pattern(sym_t(input[i])));
-        sort_parallel(alphabet.begin(), alphabet.end(), std::less<>(), num_threads);
+        comparison_sort(alphabet.begin(), alphabet.end(), std::less<>(), num_threads);
         alphabet.resize(std::unique(alphabet.begin(), alphabet.end()) - alphabet.begin());
 
         // rank_of_symbol[alphabet[x]] = x + 1

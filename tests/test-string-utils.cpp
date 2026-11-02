@@ -38,7 +38,8 @@
 
 namespace {
 
-std::mt19937_64 gen(test_seed());
+// one generator per thread (run_fuzz runs parallel functionalities on all threads)
+thread_local std::mt19937_64 gen(test_seed() + omp_get_thread_num());
 
 // the largest length of the sequences of a random FASTA file; adjusted by run_fuzz
 uint64_t max_input_size = 20000;
@@ -62,6 +63,6 @@ TEST(test_string_utils, fasta)
             const std::string file = random_fasta_file(max_input_size, num_byte_values - 1, gen);
             verify_fasta_file(file, std::uniform_int_distribution<uint64_t>(1, omp_get_max_threads())(gen),
                 [](const std::string& T) { return plain_text { T }; }, gen);
-        }, false }
+        }, true }
     }, fuzz_iterations(), &max_input_size, min_input_size);
 }
