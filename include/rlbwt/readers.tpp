@@ -203,9 +203,9 @@ inline uint64_t compressed_memory_source::size_in_bytes() const
     return size;
 }
 
-// ############################# packed_run_data #############################
+// ############################# packed_ram_reader #############################
 
-inline packed_run_data::packed_run_data(const run_data_file& file, uint16_t threads) : n(file.n())
+inline packed_ram_reader::packed_ram_reader(const run_data_file& file, uint16_t threads) : n(file.n())
 {
     const run_data_fields& f = file.fields();
     const uint8_t position_bits = std::bit_width(f.n);
