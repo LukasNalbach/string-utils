@@ -26,8 +26,8 @@
 
 /**
  * @file readers.hpp
- * @brief readers of a runs file (see ext_runs): streamed readers (sequentially from any run), random-access readers on
- *        the disk and two representations in RAM (bit-packed, and the compressed format)
+ * @brief readers of a runs file (see ext_runs): streamed readers (sequentially from any run) and random-access readers
+ *        on the disk and in RAM (in the compressed format, or bit-packed)
  */
 
 #ifndef STRING_UTILS_RLBWT_READERS_HPP
@@ -527,28 +527,28 @@ public:
 };
 
 /**
- * @brief the runs of a file in the compressed format, held in RAM in this format (RAM mode "compressed")
+ * @brief the runs of a file in the compressed format, held in RAM in this format
  */
-class compressed_run_data : public compressed_access<compressed_memory_source> {
+class compressed_ram_reader : public compressed_access<compressed_memory_source> {
 public:
-    compressed_run_data() = default;
+    compressed_ram_reader() = default;
 
     /**
      * @brief reads a file in the compressed format
      * @param file the runs file
      * @param threads number of threads that read
      */
-    compressed_run_data(const run_data_file& file, uint16_t threads = 1) : compressed_access(file, threads) { }
+    compressed_ram_reader(const run_data_file& file, uint16_t threads = 1) : compressed_access(file, threads) { }
 
     // returns the number of bytes in RAM
     uint64_t size_in_bytes() const { return source.size_in_bytes(); }
 };
 
 /**
- * @brief the runs of a file in either format, held in RAM bit-packed (RAM mode "packed"): per run its start, its
+ * @brief the runs of a file in either format, held in RAM bit-packed: per run its start, its
  *        symbol and the values the file stores, interleaved, each with a fixed number of bits
  */
-class packed_run_data {
+class packed_ram_reader {
 public:
     // the vectors of runs
     enum field : uint8_t { start_field, symbol_field, sa_start_field, sa_end_field, lcp_field };
@@ -558,14 +558,14 @@ private:
     uint64_t n = 0; // length of T$
 
 public:
-    packed_run_data() = default;
+    packed_ram_reader() = default;
 
     /**
      * @brief reads a file
      * @param file the runs file
      * @param threads number of threads that read
      */
-    packed_run_data(const run_data_file& file, uint16_t threads = 1);
+    packed_ram_reader(const run_data_file& file, uint16_t threads = 1);
 
     uint64_t num_runs() const { return runs.size(); }
     uint64_t text_length() const { return n; }
