@@ -187,4 +187,30 @@ inline std::string symbol_code::serialize(uint8_t symbol_bytes) const
 
 } // namespace rlbwt
 
+namespace rlbwt {
+
+inline uint64_t symbol_code::decode(const uint8_t* data, uint64_t& bit) const
+{
+    const uint64_t window = read_bits(data, bit, max_length);
+    const uint64_t entry = table[window & low_mask(table_bits)];
+
+    if (entry != 0) [[likely]] {
+        bit += entry & low_mask(byte_bits);
+        return symbols[entry >> byte_bits];
+    }
+
+    uint64_t code = 0;
+
+    for (uint8_t l = 1;; l++) {
+        code = (code << 1) | ((window >> (l - 1)) & 1);
+
+        if (code - first_code[l] < count[l]) {
+            bit += l;
+            return symbols[first_index[l] + code - first_code[l]];
+        }
+    }
+}
+
+} // namespace rlbwt
+
 #endif // STRING_UTILS_RLBWT_SYMBOL_CODE_TPP

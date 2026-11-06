@@ -34,7 +34,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -43,6 +45,7 @@
 
 #include <fasta/scan.hpp>
 #include <misc/files.hpp>
+#include <misc/log.hpp>
 #include <misc/memory.hpp>
 #include <rlbwt/types.hpp>
 
@@ -107,15 +110,20 @@ private:
     auto open_file() const { return direct_reader(path); }
     memory_file open_memory() const { return memory_file(data, data_size); }
 
-    // sets the samples, the map and computes the samples if none are given
+    // sets the samples, the map and computes the samples if none are given, scanning the file_size bytes of the file
     template <typename open_fnc_t>
-    void init(open_fnc_t open, const std::array<sym_t, 256>* map, uint64_t num_threads)
+    void init(open_fnc_t open, const std::array<sym_t, 256>* map, uint64_t num_threads, uint64_t file_size, bool log)
     {
         if (mapped) this->map = *map;
 
         if (samples == nullptr || num_samples == 0) {
+            std::chrono::steady_clock::time_point time;
+            log_phase_start(log, time, "scanning the FASTA file");
+            phase_progress progress(log, file_size);
             fasta_scan scan = scan_fasta_lines<fasta_chunk>(open, transform,
-                { .num_threads = num_threads }, [](auto&&...) { });
+                { .num_threads = num_threads, .progress = &progress }, [](auto&&...) { });
+            progress.finish();
+            log_phase_end(log, time);
             computed_samples = std::move(scan.samples);
             samples = computed_samples.data();
             num_samples = computed_samples.size();
@@ -136,14 +144,16 @@ public:
      * @param reverse true <=> the text is read reversed
      * @param map if not nullptr, the symbol c of the text is read as (*map)[c]
      * @param num_threads number of threads used to compute the samples
+     * @param log whether computing the samples is logged as a phase
      */
     fasta_source(const std::string& path, uint64_t text_size, const fasta_transform& transform,
         const fasta_sample* samples, uint64_t num_samples, bool reverse = false,
-        const std::array<sym_t, 256>* map = nullptr, uint64_t num_threads = 1)
+        const std::array<sym_t, 256>* map = nullptr, uint64_t num_threads = 1, bool log = false)
         : path(path), text_size(text_size), transform(transform), samples(samples), num_samples(num_samples),
           reverse(reverse), mapped(map != nullptr)
     {
-        init([&] { return open_file(); }, map, num_threads);
+        init([&] { return open_file(); }, map, num_threads, samples == nullptr || num_samples == 0
+            ? std::filesystem::file_size(path) : 0, log);
     }
 
     /**
@@ -153,11 +163,11 @@ public:
      */
     fasta_source(const uint8_t* data, uint64_t size, uint64_t text_size, const fasta_transform& transform,
         const fasta_sample* samples, uint64_t num_samples, bool reverse = false,
-        const std::array<sym_t, 256>* map = nullptr, uint64_t num_threads = 1)
+        const std::array<sym_t, 256>* map = nullptr, uint64_t num_threads = 1, bool log = false)
         : data(data), data_size(size), text_size(text_size), transform(transform), samples(samples),
           num_samples(num_samples), reverse(reverse), mapped(map != nullptr)
     {
-        init([&] { return open_memory(); }, map, num_threads);
+        init([&] { return open_memory(); }, map, num_threads, size, log);
     }
 
     uint64_t size() const override { return text_size; }

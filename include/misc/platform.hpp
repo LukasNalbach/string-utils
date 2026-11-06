@@ -27,8 +27,8 @@
 /**
  * @file platform.hpp
  * @brief the calls to the operating system: files (unbuffered and positioned I/O, page cache), CPUs (affinity,
- *        cores), memory (alignment, huge pages), console and environment. The Linux functions are defined here; the
- *        Windows functions that need <windows.h> are defined in src/platform_windows.cpp (the library
+ *        cores), memory (alignment, huge pages), console and environment. The Linux and macOS functions are defined
+ *        here; the Windows functions that need <windows.h> are defined in src/platform_windows.cpp (the library
  *        string_utils_platform), so that no header includes <windows.h>.
  *
  * A file is identified by a descriptor (int) on both systems. On Windows it is a descriptor of the C runtime around a
@@ -46,6 +46,7 @@
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -53,14 +54,34 @@
 #include <malloc.h>
 #else
 #include <fcntl.h>
-#include <linux/magic.h>
-#include <sched.h>
 #include <sys/mman.h>
-#include <sys/vfs.h>
 #include <unistd.h>
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <system_error>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <mach/mach.h>
+#include <omp.h>
+#include <pthread.h>
+#include <sys/mount.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
+
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <type_traits>
+#include <utility>
+#else
+#include <linux/magic.h>
+#include <sched.h>
+#include <sys/vfs.h>
+#endif
 #endif
 
 // the prefix of the environment variables read by string-utils (<prefix>_TMPDIR, <prefix>_HUGE_PAGES,
@@ -83,8 +104,13 @@ enum class file_access : uint8_t {
 
 /* alignment in bytes that unbuffered I/O (O_DIRECT, FILE_FLAG_NO_BUFFERING) requires of each buffer address, file
    offset and length: one sector of 4096 bytes, a multiple of the sector size of drives with 512-byte and 4096-byte
-   sectors */
+   sectors; on macOS one page of Apple silicon (16 KiB), since F_NOCACHE reads and writes smaller or unaligned ranges
+   through the page cache */
+#ifdef __APPLE__
+inline constexpr uint64_t direct_io_alignment = 16 * 1024;
+#else
 inline constexpr uint64_t direct_io_alignment = 4096;
+#endif
 
 #ifdef _WIN32
 using file_offset_t = int64_t; // type of an offset in a file
@@ -181,15 +207,20 @@ inline void start_writeback(int, uint64_t, uint64_t) {}
 // writes the bytes [off..off+len-1] of the file back to the disk and waits until they are written
 inline void write_back(int, uint64_t, uint64_t) {}
 #else
-// true <=> the pages of a file in the page cache can be written back and dropped (drop_cached, start_writeback)
+// true <=> the pages of a file in the page cache can be written back and dropped (drop_cached, start_writeback); macOS
+// has neither posix_fadvise nor sync_file_range
+#ifdef __APPLE__
+inline constexpr bool has_page_cache_control = false;
+#else
 inline constexpr bool has_page_cache_control = true;
+#endif
 
 // permissions of a file created by open_file: rw-r--r-- (reduced by the umask)
 inline constexpr mode_t created_file_mode = 0644;
 
 /**
  * @brief opens a file; with direct, the file is read and written with O_DIRECT, which fails if the file system does
- *        not support it
+ *        not support it (macOS: without the page cache, F_NOCACHE)
  * @param path path of the file
  * @param access how the file is opened
  * @param direct true <=> the file is opened with O_DIRECT
@@ -201,8 +232,19 @@ inline int open_file(const std::string& path, file_access access, bool direct)
     if (access == file_access::write) flags = O_WRONLY | O_CREAT | O_TRUNC;
     else if (access == file_access::append) flags = O_WRONLY | O_CREAT | O_APPEND;
     else if (access == file_access::read_write) flags = O_RDWR | O_CREAT | O_TRUNC;
+#ifdef __APPLE__
+    const int fd = ::open(path.c_str(), flags, created_file_mode);
+
+    if (fd >= 0 && direct && fcntl(fd, F_NOCACHE, 1) != 0) {
+        ::close(fd);
+        return -1;
+    }
+
+    return fd;
+#else
     if (direct) flags |= O_DIRECT;
     return ::open(path.c_str(), flags, created_file_mode);
+#endif
 }
 
 /**
@@ -213,8 +255,21 @@ inline int open_file(const std::string& path, file_access access, bool direct)
  */
 inline int open_pinned(const std::string& path) { return ::open(path.c_str(), O_RDONLY); }
 
+#ifdef __APPLE__
+// returns a path that opens the file of a descriptor returned by open_pinned(path): its current path (F_GETPATH; macOS
+// has no /proc/self/fd), path if that cannot be determined, or an empty path if the file at that path is another file
+inline std::string reopen_path(int fd, const std::string& path)
+{
+    char buffer[MAXPATHLEN];
+    const std::string current = fcntl(fd, F_GETPATH, buffer) == 0 ? std::string(buffer) : path;
+    struct stat opened, named;
+    if (::fstat(fd, &opened) != 0 || ::stat(current.c_str(), &named) != 0) return current;
+    return opened.st_dev == named.st_dev && opened.st_ino == named.st_ino ? current : std::string();
+}
+#else
 // returns a path that opens the file of a descriptor returned by open_pinned(path)
 inline std::string reopen_path(int fd, const std::string&) { return "/proc/self/fd/" + std::to_string(fd); }
+#endif
 
 // closes a descriptor; returns 0 on success
 inline int close(int fd) { return ::close(fd); }
@@ -260,11 +315,28 @@ inline file_offset_t seek_end(int fd) { return lseek(fd, 0, SEEK_END); }
 // sets the length of the file to size bytes (truncates or extends it); returns whether this succeeded
 inline bool set_size(int fd, uint64_t size) { return ::ftruncate(fd, off_t(size)) == 0; }
 
+// marks the file as sparse (files on Linux and APFS are sparse: extending a file allocates no blocks)
+inline void make_sparse(int) {}
+
+#ifdef __APPLE__
+// waits until the written data of the file is on the disk (fsync, macOS has no fdatasync); returns whether this
+// succeeded
+inline bool sync_data(int fd) { return ::fsync(fd) == 0; }
+
+// drops the pages of the bytes [off..off+len-1] (len = 0: up to the end) of the file from the page cache
+inline void drop_cached(int, uint64_t, uint64_t) {}
+
+// advises the kernel that the pages of the file are not accessed again
+inline void advise_no_reuse(int) {}
+
+// starts the writeback of the bytes [off..off+len-1] (len = 0: up to the end) of the file without waiting for it
+inline void start_writeback(int, uint64_t, uint64_t) {}
+
+// writes the bytes [off..off+len-1] of the file back to the disk and waits until they are written
+inline void write_back(int, uint64_t, uint64_t) {}
+#else
 // waits until the written data of the file is on the disk (fdatasync); returns whether this succeeded
 inline bool sync_data(int fd) { return ::fdatasync(fd) == 0; }
-
-// marks the file as sparse (files on Linux are sparse: extending a file allocates no blocks)
-inline void make_sparse(int) {}
 
 // drops the pages of the bytes [off..off+len-1] (len = 0: up to the end) of the file from the page cache
 inline void drop_cached(int fd, uint64_t off, uint64_t len)
@@ -287,6 +359,7 @@ inline void write_back(int fd, uint64_t off, uint64_t len)
     sync_file_range(fd, off_t(off), off_t(len),
         SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
 }
+#endif
 #endif
 
 // ############################# MEMORY #############################
@@ -357,11 +430,32 @@ inline void* allocate_aligned_counted(uint64_t bytes, uint64_t alignment)
 // frees memory allocated with allocate_aligned or allocate_aligned_counted
 inline void free_aligned(void* data) { std::free(data); }
 
-// true <=> memory that is already allocated can be advised to use transparent huge pages (advise_huge_pages)
-inline constexpr bool has_transparent_huge_pages = true;
-
 // returns the size of a page in bytes
 inline uint64_t page_size() { return uint64_t(sysconf(_SC_PAGESIZE)); }
+
+#ifdef __APPLE__
+// true <=> memory that is already allocated can be advised to use transparent huge pages (advise_huge_pages)
+inline constexpr bool has_transparent_huge_pages = false;
+
+// returns the number of bytes of physical memory available to new allocations: the free, inactive and purgeable pages
+// (0 if it is unknown)
+inline uint64_t available_memory()
+{
+    vm_statistics64_data_t stats;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t mach_page_bytes = 0;
+
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, host_info64_t(&stats), &count) != KERN_SUCCESS ||
+        host_page_size(mach_host_self(), &mach_page_bytes) != KERN_SUCCESS) return 0;
+
+    return (uint64_t(stats.free_count) + stats.inactive_count + stats.purgeable_count) * mach_page_bytes;
+}
+
+// advises the kernel to use (use = true) or not to use huge pages for a range of whole pages
+inline void advise_huge_pages(void*, uint64_t, bool) {}
+#else
+// true <=> memory that is already allocated can be advised to use transparent huge pages (advise_huge_pages)
+inline constexpr bool has_transparent_huge_pages = true;
 
 // returns the number of bytes of physical memory available to new allocations, MemAvailable in /proc/meminfo (0 if it
 // is unknown)
@@ -386,13 +480,14 @@ inline void advise_huge_pages(void* data, uint64_t bytes, bool use)
     madvise(data, size_t(bytes), use ? MADV_HUGEPAGE : MADV_NOHUGEPAGE);
 }
 #endif
+#endif
 
 // ############################# CPUS #############################
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 /**
  * @brief a set of CPUs; CPU 64 * g + b is the CPU b of the processor group g (a group has at most 64 CPUs, one bit of
- *        its affinity mask each)
+ *        its affinity mask each); on macOS, which has no cpu_set_t, the groups are only the words of the bit set
  */
 class cpu_mask {
 public:
@@ -456,7 +551,9 @@ public:
         groups[g] = mask;
     }
 };
+#endif
 
+#ifdef _WIN32
 // returns the number of online CPUs (of all processor groups), or 0 if it cannot be determined
 uint64_t num_online_cpus();
 
@@ -481,6 +578,75 @@ std::string core_of_cpu(uint64_t cpu);
 
 // returns the size in bytes of the data or unified cache of a level (1, 2 or 3), or 0 if it cannot be determined
 uint64_t cache_bytes(uint64_t level);
+#elif defined(__APPLE__)
+// returns the value of an integer sysctl, or 0 if it cannot be read
+inline uint64_t sysctl_value(const char* name)
+{
+    uint64_t value = 0;
+    size_t size = sizeof(value);
+    if (sysctlbyname(name, &value, &size, nullptr, 0) != 0) return 0;
+    // 32-bit values (little endian) are stored in the low bytes
+    return size == sizeof(uint32_t) ? uint64_t(uint32_t(value)) : value;
+}
+
+// returns the size in bytes of the data or unified cache of a level (1, 2 or 3), or 0 if it cannot be determined; on
+// Apple silicon, the caches of a performance core (of the level-2 cache of a cluster of cores, the share of one core)
+inline uint64_t cache_bytes(uint64_t level)
+{
+    const char* const perf_names[] = {"hw.perflevel0.l1dcachesize", "hw.perflevel0.l2cachesize",
+        "hw.perflevel0.l3cachesize"};
+    const char* const names[] = {"hw.l1dcachesize", "hw.l2cachesize", "hw.l3cachesize"};
+    if (level < 1 || level > 3) return 0;
+    const uint64_t bytes = sysctl_value(perf_names[level - 1]);
+    if (bytes == 0) return sysctl_value(names[level - 1]);
+    const uint64_t cores_per_l2 = level == 2 ? sysctl_value("hw.perflevel0.cpusperl2") : 0;
+    return cores_per_l2 > 1 ? bytes / cores_per_l2 : bytes;
+}
+
+// returns the number of performance cores (hw.perflevel0.logicalcpu; all online CPUs on a Mac without core types)
+inline uint64_t num_performance_cpus()
+{
+    const uint64_t num_cpus = sysctl_value("hw.perflevel0.logicalcpu");
+    return num_cpus > 0 ? num_cpus : uint64_t(std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)));
+}
+
+// returns the number of online CPUs, or 0 if it cannot be determined
+inline uint64_t num_online_cpus()
+{
+    const auto num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    return num_cpus > 0 ? uint64_t(num_cpus) : 0;
+}
+
+// returns the set of all num_cpus = num_online_cpus() online CPUs (the CPUs [0..num_cpus-1])
+inline cpu_mask all_cpus(uint64_t num_cpus)
+{
+    cpu_mask cpus;
+    for (uint64_t cpu = 0; cpu < num_cpus; cpu++) cpus.set(cpu);
+    return cpus;
+}
+
+// returns the CPUs the process may run on: all online CPUs (macOS has no affinity of threads to CPUs)
+inline cpu_mask process_cpus() { return all_cpus(num_online_cpus()); }
+
+// stores the CPUs the calling thread may run on in cpus: all online CPUs; returns whether this succeeded
+inline bool get_thread_cpus(cpu_mask& cpus)
+{
+    cpus = process_cpus();
+    return true;
+}
+
+// restricts the calling thread to a set of CPUs; macOS cannot, so this fails
+inline bool set_thread_cpus(const cpu_mask&) { return false; }
+
+// returns a string that is equal for all CPUs of the same physical core as CPU cpu, and only for them; macOS numbers
+// the hardware threads of a core consecutively (Apple silicon has one per core)
+inline std::string core_of_cpu(uint64_t cpu)
+{
+    const uint64_t num_logical = sysctl_value("hw.logicalcpu");
+    const uint64_t num_physical = sysctl_value("hw.physicalcpu");
+    const uint64_t threads_per_core = num_physical > 0 && num_logical >= num_physical ? num_logical / num_physical : 1;
+    return "core " + std::to_string(cpu / threads_per_core);
+}
 #else
 // a set of CPUs (cpu_set_t)
 class cpu_mask {
@@ -569,6 +735,108 @@ inline std::string core_of_cpu(uint64_t cpu)
 }
 #endif
 
+// ############################# THREADS #############################
+
+#ifdef __APPLE__
+/**
+ * @brief a thread with a stack of STRING_UTILS_STACK_BYTES bytes (std::thread gets 512 KiB on macOS); the part of the
+ *        interface of std::thread that is used: construction from a callable, move, joinable and join
+ */
+class thread {
+    pthread_t handle {};
+    bool running = false;
+
+    // runs and deletes the callable; an exception that leaves it calls std::terminate (as in std::thread)
+    template <typename fnc_t>
+    static void* run(void* fnc) noexcept
+    {
+        std::unique_ptr<fnc_t>(static_cast<fnc_t*>(fnc))->operator()();
+        return nullptr;
+    }
+
+public:
+    thread() = default;
+    thread(const thread&) = delete;
+    thread& operator=(const thread&) = delete;
+    thread(thread&& other) noexcept : handle(other.handle), running(std::exchange(other.running, false)) { }
+    ~thread() { if (running) std::terminate(); }
+
+    // starts a thread that runs fnc; throws std::system_error if the thread cannot be created
+    template <typename fnc_t>
+        requires(!std::is_same_v<std::decay_t<fnc_t>, thread>)
+    explicit thread(fnc_t&& fnc)
+    {
+        using stored_t = std::decay_t<fnc_t>;
+        auto stored = std::make_unique<stored_t>(std::forward<fnc_t>(fnc));
+        pthread_attr_t attributes;
+        pthread_attr_init(&attributes);
+#ifdef STRING_UTILS_STACK_BYTES
+        pthread_attr_setstacksize(&attributes, size_t(STRING_UTILS_STACK_BYTES));
+#endif
+        const int error = pthread_create(&handle, &attributes, &run<stored_t>, stored.get());
+        pthread_attr_destroy(&attributes);
+        if (error != 0) throw std::system_error(error, std::generic_category(), "pthread_create");
+        stored.release();
+        running = true;
+    }
+
+    thread& operator=(thread&& other) noexcept
+    {
+        if (running) std::terminate();
+        handle = other.handle;
+        running = std::exchange(other.running, false);
+        return *this;
+    }
+
+    bool joinable() const { return running; }
+
+    void join()
+    {
+        pthread_join(handle, nullptr);
+        running = false;
+    }
+};
+
+// returns the path of the executable of the process (empty if it cannot be determined)
+inline std::string executable_path()
+{
+    uint32_t length = 0;
+    _NSGetExecutablePath(nullptr, &length);
+    std::string path(length, '\0');
+    if (_NSGetExecutablePath(path.data(), &length) != 0) return {};
+    path.resize(std::strlen(path.c_str()));
+    return path;
+}
+
+/**
+ * @brief prepares the process: a stack of STRING_UTILS_STACK_BYTES bytes for the threads of OpenMP (the main thread has
+ *        8 MiB) and, unless OMP_NUM_THREADS is set, one thread of OpenMP per performance core
+ */
+inline void init()
+{
+#if defined(STRING_UTILS_STACK_BYTES) && defined(KMP_VERSION_MAJOR)
+    kmp_set_stacksize_s(size_t(STRING_UTILS_STACK_BYTES));
+#endif
+    if (std::getenv("OMP_NUM_THREADS") == nullptr) omp_set_num_threads(int(num_performance_cpus()));
+}
+
+// true after init() has run; init() runs before main in every program that includes this header
+inline const bool is_initialized = (init(), true);
+#else
+// a thread (std::thread, with the stack size of the main thread on Linux and of the executable on Windows)
+using thread = std::thread;
+
+#ifndef _WIN32
+// returns the path of the executable of the process (empty if it cannot be determined)
+inline std::string executable_path()
+{
+    std::error_code error;
+    const std::filesystem::path path = std::filesystem::read_symlink("/proc/self/exe", error);
+    return error ? std::string() : path.string();
+}
+#endif
+#endif
+
 // ############################# CONSOLE, ENVIRONMENT, TEMPORARY FILES #############################
 
 #ifdef _WIN32
@@ -606,6 +874,15 @@ inline void set_env(const char* name, const std::string& value) { setenv(name, v
 // removes an environment variable
 inline void unset_env(const char* name) { unsetenv(name); }
 
+#ifdef __APPLE__
+// returns whether a path lies on a tmpfs file system (false if it cannot be determined)
+inline bool is_ram_disk(const std::string& path)
+{
+    struct statfs info;
+    if (statfs(path.c_str(), &info) != 0) return false;
+    return std::strcmp(info.f_fstypename, "tmpfs") == 0;
+}
+#else
 // returns whether a path lies on a RAM disk, a tmpfs or ramfs file system (false if it cannot be determined)
 inline bool is_ram_disk(const std::string& path)
 {
@@ -613,6 +890,7 @@ inline bool is_ram_disk(const std::string& path)
     if (statfs(path.c_str(), &info) != 0) return false;
     return info.f_type == TMPFS_MAGIC || info.f_type == RAMFS_MAGIC;
 }
+#endif
 
 // the directory for temporary files if the system does not name one
 inline constexpr const char* fallback_temporary_directory = "/tmp";

@@ -534,19 +534,13 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
 
     return _pclose(pipe) == 0 && fed;
 #else
-#ifdef __linux__
     // path of this executable (in the command, /proc/self/exe is the path of the shell)
-    std::error_code self_error;
-    const std::string self = peak_path.empty() ? std::string()
-        : std::filesystem::read_symlink("/proc/self/exe", self_error).string();
-    const bool measured = !self.empty() && !self_error;
+    const std::string self = peak_path.empty() ? std::string() : platform::executable_path();
+    const bool measured = !self.empty();
     if (measured) {
         line = shell_quoted(self) + " " + measure_peak_option + " " + shell_quoted(peak_path) + " "
             + shell_quoted(line);
     }
-#else
-    const bool measured = false;
-#endif
     // the descriptor of the program its output is read from (-1: it writes its output file itself)
     const int output_descriptor = command.output == output_target::standard_output ? STDOUT_FILENO
         : command.output == output_target::descriptor_3 ? 3 : -1;
@@ -608,10 +602,10 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
     bool written = true; // whether the whole output of the program was written to out_path
 
     // writes feed_path to the standard input of the program
-    std::thread feeder;
+    platform::thread feeder;
 
     if (feed) {
-        feeder = std::thread([&]() {
+        feeder = platform::thread([&]() {
             std::error_code error;
             const uint64_t total = std::filesystem::file_size(feed_path, error);
             phase_progress progress(log && !error, total);
@@ -635,10 +629,10 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
     }
 
     // writes the output of the program to out_path with O_DIRECT
-    std::thread drainer;
+    platform::thread drainer;
 
     if (output_descriptor >= 0) {
-        drainer = std::thread([&]() {
+        drainer = platform::thread([&]() {
             direct_ofstream out(out_path);
             written = out.is_open();
             std::string buffer;

@@ -46,15 +46,7 @@ struct alignas(cache_line_bytes) encoded_blocks {
     std::vector<uint64_t> run_sizes, lcp_sizes; // the size in bytes of each block of runs and of LCP values
     uint64_t runs_offset = 0, lcps_offset = 0; // the offsets of runs and lcps in their sections
 
-    void clear()
-    {
-        runs.clear();
-        lcps.clear();
-        sa_starts.clear();
-        sa_ends.clear();
-        run_sizes.clear();
-        lcp_sizes.clear();
-    }
+    void clear();
 };
 
 /**

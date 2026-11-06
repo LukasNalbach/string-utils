@@ -114,25 +114,7 @@ public:
 
     // calls fnc(start, symbol) for the runs in order (starts relative to the first one)
     template <typename fnc_t>
-    void for_each(fnc_t fnc) const
-    {
-        uint64_t pos = 0; // position in the upper bits after the last set bit found
-        uint64_t bit = codes_begin; // offset of the next code
-
-        for (uint64_t k = 0; k < m; k++) {
-            uint64_t word = read_bits(data, upper_begin + pos, max_packed_bits);
-
-            while (word == 0) {
-                pos += max_packed_bits;
-                word = read_bits(data, upper_begin + pos, max_packed_bits);
-            }
-
-            pos += std::countr_zero(word);
-            const uint64_t low = read_bits(data, lows_begin + k * low_bits, low_bits);
-            fnc(((pos - k) << low_bits) | low, code->decode(data, bit));
-            pos++;
-        }
-    }
+    void for_each(fnc_t fnc) const;
 };
 
 /**
@@ -186,20 +168,7 @@ public:
 
     // calls fnc(value) for the values in order
     template <typename fnc_t>
-    void for_each(fnc_t fnc) const
-    {
-        uint64_t run = 0; // number of runs of equal high parts started so far
-        uint64_t high_part = 0; // the high part of the current run
-
-        for (uint64_t k = 0; k < m; k++) {
-            if (high > 0 && read_bits(data, starts_begin + k, 1) != 0) {
-                high_part = read_bits(data, highs_begin + run * high, high) << split;
-                run++;
-            }
-
-            fnc(base + (high_part | read_bits(data, lows_begin + k * split, split)));
-        }
-    }
+    void for_each(fnc_t fnc) const;
 };
 
 } // namespace rlbwt

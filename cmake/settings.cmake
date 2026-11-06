@@ -57,11 +57,13 @@ if(NOT string_utils_msvc_abi)
   add_compile_options(-pthread)
 endif()
 
-# one section per function, such that the linker removes unused functions (--gc-sections, /OPT:REF)
+# one section per function, such that the linker removes unused functions (--gc-sections, /OPT:REF, -dead_strip)
 add_compile_options(-ffunction-sections -fdata-sections)
 
 if(string_utils_msvc_abi)
   add_link_options(LINKER:/OPT:REF,/OPT:ICF)
+elseif(APPLE)
+  add_link_options(-Wl,-dead_strip)
 else()
   add_link_options(-Wl,--gc-sections)
 endif()
@@ -81,6 +83,14 @@ set(CMAKE_CXX_FLAGS_RELEASE         "${string_utils_release_flags} -O3")
 set(CMAKE_CXX_FLAGS_MINSIZEREL      "${string_utils_release_flags} -Os")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO  "${string_utils_debug_flags} -O3")
 
+# stack size in bytes of the threads: the default of Linux (ulimit -s), where the default of Windows is 1 MiB (main
+# thread and threads) and that of macOS 512 KiB (threads) and 1 MiB (threads of LLVM's OpenMP runtime); the threads of
+# OpenMP get it in platform::init, the other threads are platform::thread (see include/misc/platform.hpp)
+if(WIN32 OR APPLE)
+  math(EXPR STRING_UTILS_STACK_BYTES "8 * 1024 * 1024")
+  add_compile_definitions(STRING_UTILS_STACK_BYTES=${STRING_UTILS_STACK_BYTES})
+endif()
+
 if(WIN32)
   # the resource compiler, for the manifest of the executables (see string_utils_add_executable in string_utils.cmake)
   enable_language(RC)
@@ -88,10 +98,7 @@ if(WIN32)
   # stand-ins for <sys/mman.h> (sux) and <sys/resource.h> (sdsl)
   include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/winshim")
 
-  # stack size in bytes of the main thread and of the threads of OpenMP: the default of Linux (ulimit -s), where the
-  # default of Windows is 1 MiB (the threads of OpenMP get it in platform::init, see include/misc/platform.hpp)
-  math(EXPR STRING_UTILS_STACK_BYTES "8 * 1024 * 1024")
-  add_compile_definitions(_REENTRANT STRING_UTILS_STACK_BYTES=${STRING_UTILS_STACK_BYTES})
+  add_compile_definitions(_REENTRANT)
 
   # the check of -march=native in the CMake files of ips4o and ips2ra fails on Windows (<prefix>_MARCH_NATIVE applies)
   set(IPS4O_OPTIMIZE_FOR_NATIVE OFF CACHE BOOL "" FORCE)

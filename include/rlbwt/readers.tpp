@@ -251,4 +251,91 @@ inline packed_ram_reader::packed_ram_reader(const run_data_file& file, uint16_t 
 
 } // namespace rlbwt
 
+namespace rlbwt {
+
+inline void read_record(const record_layout& layout, const uint8_t* p, bool last, uint64_t n, run_record& rec)
+{
+    rec.start = read_bytes(p, layout.position_bytes);
+    rec.symbol = read_bytes(p + layout.symbol, layout.symbol_bytes);
+    rec.length = (last ? n : read_bytes(p + layout.bytes, layout.position_bytes)) - rec.start;
+
+    if (layout.sa_end != layout.sa_start) {
+        rec.sa_start = read_bytes(p + layout.sa_start, layout.position_bytes);
+        rec.sa_end = read_bytes(p + layout.sa_end, layout.position_bytes);
+    }
+
+    if (layout.bytes != layout.lcp) rec.lcp = read_bytes(p + layout.lcp, layout.position_bytes);
+}
+
+inline void plain_run_stream::next(run_record& rec)
+{
+    const uint64_t i = next_run++;
+    const bool last = i + 1 == file->r();
+    const uint64_t beg = offset + i * layout.bytes;
+    const uint8_t* p = in.read_ahead(beg, beg + layout.bytes + (last ? 0 : layout.position_bytes));
+    read_record(layout, p, last, file->n(), rec);
+}
+
+inline void compressed_run_stream::next(run_record& rec)
+{
+    const uint64_t i = next_run++;
+    const uint64_t b = i / file->fields().runs_per_block;
+    if (b != block) load_block(b);
+    const uint64_t k = i - b * file->fields().runs_per_block;
+    rec.start = starts[k];
+    rec.length = starts[k + 1] - starts[k];
+    rec.symbol = symbols[k];
+
+    if (with_sa) {
+        rec.sa_start = sa_value(sa_starts_in, sa_starts_offset, i);
+        rec.sa_end = sa_value(sa_ends_in, sa_ends_offset, i);
+    }
+
+    if (with_lcp) {
+        const uint64_t L = file->fields().lcp_values_per_block, c = i / L;
+        if (c != current_lcp_block) load_lcp_block(c);
+        rec.lcp = lcps[i - c * L];
+    }
+}
+
+template <typename source_t>
+inline run_record compressed_access<source_t>::run_and_length(uint64_t i)
+{
+    const run_data_file& f = file();
+    const uint64_t R = f.fields().runs_per_block, b = i / R, k = i - b * R;
+    const run_block blk = run_block_at(b);
+    const uint64_t start = blk.start(k);
+    const uint64_t next = k + 1 < f.runs_in_block(b) ? blk.start(k + 1) : f.block_start(b + 1) - f.block_start(b);
+    return { .start = f.block_start(b) + start, .length = next - start, .symbol = blk.symbol(k) };
+}
+
+template <typename source_t>
+inline run_record compressed_access<source_t>::record(uint64_t i)
+{
+    run_record rec = run_and_length(i);
+
+    if (file().has_sa_samples()) {
+        rec.sa_start = sa_start(i);
+        rec.sa_end = sa_end(i);
+    }
+
+    if (file().has_lcp_samples()) rec.lcp = lcp(i);
+    return rec;
+}
+
+inline uint64_t packed_ram_reader::run_of(uint64_t j) const
+{
+    uint64_t lo = 0, hi = runs.size(); // start(lo) <= j < start(hi)
+
+    while (hi - lo > 1) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (runs.get<start_field>(mid) <= j) lo = mid;
+        else hi = mid;
+    }
+
+    return lo;
+}
+
+} // namespace rlbwt
+
 #endif // STRING_UTILS_RLBWT_READERS_TPP

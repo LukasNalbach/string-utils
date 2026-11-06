@@ -113,4 +113,18 @@ auto build_with_byte_map(const byte_set& occurs, uint64_t min_symbol, output_par
 
 } // namespace rlbwt
 
+namespace rlbwt {
+
+template <typename sym_t>
+inline void mapped_byte_source<sym_t>::reader::read(uint64_t pos, uint64_t len, sym_t* dst)
+{
+    for (uint64_t i = 0; i < len; i += read_block_size) {
+        const uint64_t block_len = std::min(read_block_size, len - i);
+        const uint8_t* block = bytes->view(pos + i, block_len);
+        for (uint64_t j = 0; j < block_len; j++) dst[i + j] = source.map[block[j]];
+    }
+}
+
+} // namespace rlbwt
+
 #endif // STRING_UTILS_RLBWT_BYTE_MAP_TPP

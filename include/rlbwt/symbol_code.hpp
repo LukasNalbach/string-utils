@@ -127,27 +127,7 @@ public:
      * @param bit offset (in bits) of the code; it is advanced by the code length
      * @return the symbol
      */
-    inline uint64_t decode(const uint8_t* data, uint64_t& bit) const
-    {
-        const uint64_t window = read_bits(data, bit, max_length);
-        const uint64_t entry = table[window & low_mask(table_bits)];
-
-        if (entry != 0) [[likely]] {
-            bit += entry & low_mask(byte_bits);
-            return symbols[entry >> byte_bits];
-        }
-
-        uint64_t code = 0;
-
-        for (uint8_t l = 1;; l++) {
-            code = (code << 1) | ((window >> (l - 1)) & 1);
-
-            if (code - first_code[l] < count[l]) {
-                bit += l;
-                return symbols[first_index[l] + code - first_code[l]];
-            }
-        }
-    }
+    inline uint64_t decode(const uint8_t* data, uint64_t& bit) const;
 
     // skips the code at a bit offset (see decode)
     inline void skip(const uint8_t* data, uint64_t& bit) const { decode(data, bit); }
