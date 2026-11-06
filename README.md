@@ -24,7 +24,7 @@ large strings and integer arrays, together with the third-party libraries they u
   [libsais](https://github.com/IlyaGrebnov/libsais), [gtl](https://github.com/greg7mdp/gtl),
   [emhash](https://github.com/ktprime/emhash) and [googletest](https://github.com/google/googletest).
 
-The code builds on Linux with GCC or Clang and on Windows with Clang or MinGW-w64.
+The code builds on Linux with GCC or Clang, on macOS with Apple Clang and on Windows with Clang or MinGW-w64.
 
 ## Build
 
@@ -37,6 +37,25 @@ cmake --build build
 
 `cmake` downloads the submodules and applies the patches in [patches/](patches/) to them. The libraries are built, the
 tests (`build/tests/test-string-utils`) only with `-DSTRING_UTILS_BUILD_TESTS=ON`.
+
+### macOS
+
+Apple Clang has no OpenMP runtime, so install LLVM's `libomp` and the build tools with [Homebrew](https://brew.sh)
+(Xcode or the Command Line Tools, `xcode-select --install`, provide the compiler):
+
+```shell
+brew install libomp cmake ninja
+```
+
+Then build as above. CMake finds `libomp` in Homebrew (`brew --prefix libomp`) or MacPorts (`port install libomp`);
+for another installation, pass its prefix with `-DOpenMP_ROOT=<prefix>` or the environment variable `OpenMP_ROOT`.
+TBB is not needed: ips4o and ips2ra use their queue of jobs without TBB, as on Windows.
+
+Differences from Linux: macOS cannot bind threads to CPUs (the affinity functions do nothing), files opened with
+`O_DIRECT` on Linux are opened with `F_NOCACHE`, the page cache cannot be dropped and transparent huge pages are not
+used. If linking fails with `ld: tapi error: malformed file ... unknown architecture`, the Command Line Tools are older
+than the newest SDK; update them, or select an older SDK from `/Library/Developer/CommandLineTools/SDKs/`, e.g.
+`export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk`, before running `cmake`.
 
 ## Usage in CMake
 

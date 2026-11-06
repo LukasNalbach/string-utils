@@ -26,6 +26,38 @@ set(STRING_UTILS_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE INTERNAL "build 
 
 ############################# third-party libraries #############################
 
+# macOS: Apple clang has no OpenMP runtime; LLVM's libomp from Homebrew (brew install libomp, not linked into the
+# prefix), from MacPorts (port install libomp) or from OpenMP_ROOT (CMake or environment variable)
+if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND NOT OpenMP_CXX_FLAGS)
+  set(string_utils_libomp_hints ${OpenMP_ROOT} $ENV{OpenMP_ROOT})
+  find_program(STRING_UTILS_BREW brew)
+
+  if(STRING_UTILS_BREW)
+    execute_process(COMMAND "${STRING_UTILS_BREW}" --prefix libomp
+      OUTPUT_VARIABLE string_utils_brew_libomp OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    list(APPEND string_utils_libomp_hints "${string_utils_brew_libomp}")
+  endif()
+
+  list(APPEND string_utils_libomp_hints /opt/homebrew/opt/libomp /usr/local/opt/libomp /opt/local)
+  find_path(STRING_UTILS_LIBOMP_INCLUDE_DIR omp.h HINTS ${string_utils_libomp_hints}
+    PATH_SUFFIXES include include/libomp NO_DEFAULT_PATH)
+  find_library(STRING_UTILS_LIBOMP_LIBRARY omp HINTS ${string_utils_libomp_hints}
+    PATH_SUFFIXES lib lib/libomp NO_DEFAULT_PATH)
+
+  if(STRING_UTILS_LIBOMP_INCLUDE_DIR AND STRING_UTILS_LIBOMP_LIBRARY)
+    foreach(lang C CXX)
+      set(OpenMP_${lang}_FLAGS "-Xpreprocessor -fopenmp" CACHE STRING "" FORCE)
+      set(OpenMP_${lang}_LIB_NAMES "omp" CACHE STRING "" FORCE)
+      set(OpenMP_${lang}_INCLUDE_DIR "${STRING_UTILS_LIBOMP_INCLUDE_DIR}" CACHE PATH "" FORCE)
+    endforeach()
+
+    set(OpenMP_omp_LIBRARY "${STRING_UTILS_LIBOMP_LIBRARY}" CACHE FILEPATH "" FORCE)
+  else()
+    message(FATAL_ERROR "libomp was not found; install it with 'brew install libomp' (or set OpenMP_ROOT to its "
+      "prefix)")
+  endif()
+endif()
+
 # openmp (the imported targets are made global, since the projects that use string-utils link them)
 find_package(OpenMP REQUIRED)
 foreach(openmp OpenMP::OpenMP_CXX OpenMP::OpenMP_C)
@@ -43,19 +75,25 @@ if(MINGW)
   endforeach()
 endif()
 
-# ips4o (on Windows with a queue of jobs without TBB, see patches/ips4o.patch)
+# ips4o (on Windows and macOS with a queue of jobs without TBB, see patches/ips4o.patch)
+if(APPLE)
+  # the CMake file of ips4o would link TBB and libatomic, which macOS does not have; the parallel sort is compiled
+  # anyway (-pthread defines _REENTRANT)
+  set(IPS4O_DISABLE_PARALLEL ON CACHE BOOL "" FORCE)
+endif()
+
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips4o" EXCLUDE_FROM_ALL)
 
-if(WIN32)
+if(WIN32 OR APPLE)
   target_compile_definitions(ips4o INTERFACE IPS4O_NO_TBB)
 endif()
 
-# ips2ra (its parallel sort is compiled through _REENTRANT; on Windows with a queue of jobs without TBB, see
+# ips2ra (its parallel sort is compiled through _REENTRANT; on Windows and macOS with a queue of jobs without TBB, see
 # patches/ips2ra.patch)
 set(IPS2RA_DISABLE_PARALLEL ON CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/ips2ra" EXCLUDE_FROM_ALL)
 
-if(WIN32)
+if(WIN32 OR APPLE)
   target_compile_definitions(ips2ra INTERFACE IPS2RA_NO_TBB)
 endif()
 
@@ -67,6 +105,13 @@ if(STRING_UTILS_USE_MALLOC_COUNT AND NOT WIN32)
   target_sources(malloc_count INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/external/malloc_count/malloc_count.c")
   target_link_libraries(malloc_count INTERFACE dl)
   target_compile_definitions(malloc_count INTERFACE STRING_UTILS_USE_MALLOC_COUNT=1)
+
+  # macOS: operator new of libc++ calls the malloc of the system (see src/malloc_count_macos.cpp); the executable
+  # exports its malloc, free, new and delete also with link-time optimization
+  if(APPLE)
+    target_sources(malloc_count INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/malloc_count_macos.cpp")
+    target_link_options(malloc_count INTERFACE -Wl,-export_dynamic)
+  endif()
 elseif(STRING_UTILS_USE_MALLOC_COUNT AND (MINGW OR CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL "MultiThreaded"))
   target_sources(malloc_count INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/malloc_count_windows.cpp")
   target_include_directories(malloc_count INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include/")

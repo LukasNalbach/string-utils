@@ -120,7 +120,7 @@ protected:
      * @brief returns the number of bytes of size entries, rounded up to a multiple of 8 bytes
      * @param size number of entries per vector
      */
-    uint64_t byte_size(uint64_t size) const { return sizeof(uint64_t) * div_ceil(size * width_entry, 8 * sizeof(uint64_t)); }
+    uint64_t byte_size(uint64_t size) const { return sizeof(uint64_t) * div_ceil<uint64_t>(size * width_entry, 8 * sizeof(uint64_t)); }
 
     /**
      * @brief returns the position of the first bit of the i-th entry of the vector with index vec_idx

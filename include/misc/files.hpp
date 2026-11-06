@@ -123,7 +123,7 @@ class page_cache_dropper {
     bool running = false; // false <=> the destructor has asked the background thread to stop
     std::mutex mutex; // protects running
     std::condition_variable wake; // wakes the background thread up when running becomes false
-    std::thread worker; // the background thread
+    platform::thread worker; // the background thread
 
     // ############################# INTERNAL METHODS #############################
 
@@ -698,21 +698,7 @@ public:
      * @param end [beg+1..size()] position after the last position of the range
      * @return pointer to the first byte of the range, valid until the next call of read()
      */
-    const uint8_t* read(uint64_t beg, uint64_t end)
-    {
-        finish_ahead(beg, end);
-        const uint8_t* bytes = readers[current].read(beg, end);
-        const uint64_t n = size();
-
-        if (end < n) {
-            ahead_beg = end - std::min<uint64_t>(end, 2);
-            ahead_end = std::min(n, end - 1 + block);
-            direct_reader& next = readers[1 - current];
-            ahead = std::async(std::launch::async, [&next, b = ahead_beg, e = ahead_end] { next.read(b, e); });
-        }
-
-        return bytes;
-    }
+    const uint8_t* read(uint64_t beg, uint64_t end);
 };
 
 /**
@@ -979,52 +965,10 @@ public:
     parallel_output_file(const parallel_output_file&) = delete;
     parallel_output_file& operator=(const parallel_output_file&) = delete;
 
-    void write(const void* data, uint64_t size, uint64_t offset) override
-    {
-        const uint8_t* bytes = (const uint8_t*) data;
-        const uint64_t end = offset + size;
-
-        {
-            std::lock_guard<std::mutex> guard(lock);
-            length = std::max(length, end);
-        }
-
-        if (!direct) {
-            write_aligned(bytes, size, offset);
-            return;
-        }
-
-        // [first, last) are the sectors the write covers completely
-        const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
-        const uint64_t last = std::max(first, (end / sector) * sector);
-        if (offset < first) write_partial(bytes, offset, first);
-        if (last < end) write_partial(bytes + (last - offset), last, end);
-        if (first == last) return;
-
-        // the complete sectors are copied to an aligned buffer of each thread
-        static thread_local std::unique_ptr<uint8_t, decltype(&platform::free_aligned)> buffer(
-            (uint8_t*) allocate_aligned(copy_buffer_bytes), &platform::free_aligned);
-
-        for (uint64_t pos = first; pos < last; pos += copy_buffer_bytes) {
-            const uint64_t num = std::min(copy_buffer_bytes, last - pos);
-            std::memcpy(buffer.get(), bytes + (pos - offset), num);
-            write_aligned(buffer.get(), num, pos);
-        }
-    }
+    void write(const void* data, uint64_t size, uint64_t offset) override;
 
     // writes the partly written sectors and truncates the file to its length
-    void close() override
-    {
-        for (auto& [index, s] : partial) {
-            write_aligned(s.bytes, sector, index * sector);
-            platform::free_aligned(s.bytes);
-        }
-
-        partial.clear();
-        if (!platform::set_size(fd, length)) throw std::runtime_error("cannot write " + path);
-        platform::close(fd);
-        fd = -1;
-    }
+    void close() override;
 };
 
 /**
@@ -1047,18 +991,7 @@ private:
     const uint8_t* data = nullptr; // the bytes of value beg in the buffer
 
     // reads the values [i, i + read_bytes / width) into the buffer
-    void read_from(uint64_t i)
-    {
-        beg = i;
-        end = std::min(num_values, i + std::max<uint64_t>(1, read_bytes / width));
-        const uint64_t first = beg * width, last = end * width; // the bytes [first, last) are needed
-        const uint64_t read_beg = direct ? (first / sector) * sector : first;
-        const uint64_t read_end = direct ? div_ceil(last, sector) * sector : last;
-        const uint64_t num_read = pread_fully(fd, buffer, read_end - read_beg, read_beg);
-        if (read_beg + num_read < last) throw std::runtime_error("cannot read a file");
-        if (!direct) platform::drop_cached(fd, read_beg, num_read);
-        data = buffer + (first - read_beg);
-    }
+    void read_from(uint64_t i);
 
 public:
     /**
@@ -1067,25 +1000,7 @@ public:
      * @param width bytes per value
      * @param read_bytes number of bytes read at once (at least width)
      */
-    array_file_reader(const std::string& path, uint64_t width, uint64_t read_bytes)
-        : width(width), mask(width >= sizeof(uint64_t) ? ~uint64_t { 0 } : (uint64_t { 1 } << (8 * width)) - 1),
-          read_bytes(read_bytes)
-    {
-        std::error_code ec;
-        num_values = std::filesystem::file_size(path, ec) / width;
-        if (ec) throw std::runtime_error("cannot read " + path);
-        buffer = (uint8_t*) platform::allocate_aligned_counted(div_ceil(read_bytes, sector) * sector + 2 * sector,
-            sector);
-        if (buffer == nullptr) throw std::bad_alloc();
-        fd = open_direct_or_buffered(path, platform::file_access::read, direct);
-
-        if (fd < 0) {
-            platform::free_aligned(buffer);
-            throw std::runtime_error("cannot read " + path);
-        }
-
-        if (!direct) advise_uncached(fd);
-    }
+    array_file_reader(const std::string& path, uint64_t width, uint64_t read_bytes);
 
     ~array_file_reader()
     {
@@ -1119,18 +1034,7 @@ public:
     }
 
     // copies the values [from, to) to dst
-    void read(uint64_t from, uint64_t to, void* dst)
-    {
-        uint8_t* out = (uint8_t*) dst;
-
-        for (uint64_t i = from; i < to;) {
-            const uint8_t* src = bytes(i);
-            const uint64_t num = std::min(to, end) - i;
-            std::memcpy(out, src, num * width);
-            out += num * width;
-            i += num;
-        }
-    }
+    void read(uint64_t from, uint64_t to, void* dst);
 };
 
 #include "files.tpp"

@@ -191,7 +191,7 @@ inline std::array<val_t, count> interleaved_bit_aligned_vectors::get_multiple(ui
     // the entries do not fit into one uint128_t block; read each one separately
     if (span + 7 > 8 * sizeof(uint128_t)) {
         std::array<val_t, count> out;
-        [&]<uint64_t... k>(std::index_sequence<k...>) {
+        [&]<size_t... k>(std::index_sequence<k...>) {
             ((out[k] = get<uint8_t(vec_idx + k), val_t>(i)), ...);
         }(std::make_index_sequence<count>{});
         return out;

@@ -149,4 +149,21 @@ inline bool run_data_file::read_contents()
 
 } // namespace rlbwt
 
+namespace rlbwt {
+
+inline uint64_t run_data_file::block_of_position(uint64_t j) const
+{
+    uint64_t lo = 0, hi = blocks; // block_start(lo) <= j < block_start(hi)
+
+    while (hi - lo > 1) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (block_start(mid) <= j) lo = mid;
+        else hi = mid;
+    }
+
+    return lo;
+}
+
+} // namespace rlbwt
+
 #endif // STRING_UTILS_RLBWT_RUN_DATA_FILE_TPP

@@ -40,7 +40,7 @@ inline page_cache_dropper::page_cache_dropper(std::vector<std::string> files_eve
     if constexpr (!platform::has_page_cache_control) return;
     running = true;
 
-    worker = std::thread([this, interval]() {
+    worker = platform::thread([this, interval]() {
         std::unique_lock<std::mutex> lock(mutex);
 
         while (running) {
@@ -493,6 +493,114 @@ inline bool direct_positioned_file::close_file()
     ok = platform::close(fd) == 0 && ok;
     fd = -1;
     return ok;
+}
+
+inline const uint8_t* read_ahead_reader::read(uint64_t beg, uint64_t end)
+{
+    finish_ahead(beg, end);
+    const uint8_t* bytes = readers[current].read(beg, end);
+    const uint64_t n = size();
+
+    if (end < n) {
+        ahead_beg = end - std::min<uint64_t>(end, 2);
+        ahead_end = std::min(n, end - 1 + block);
+        direct_reader& next = readers[1 - current];
+        ahead = std::async(std::launch::async, [&next, b = ahead_beg, e = ahead_end] { next.read(b, e); });
+    }
+
+    return bytes;
+}
+
+inline void parallel_output_file::write(const void* data, uint64_t size, uint64_t offset)
+{
+    const uint8_t* bytes = (const uint8_t*) data;
+    const uint64_t end = offset + size;
+
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        length = std::max(length, end);
+    }
+
+    if (!direct) {
+        write_aligned(bytes, size, offset);
+        return;
+    }
+
+    // [first, last) are the sectors the write covers completely
+    const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
+    const uint64_t last = std::max(first, (end / sector) * sector);
+    if (offset < first) write_partial(bytes, offset, first);
+    if (last < end) write_partial(bytes + (last - offset), last, end);
+    if (first == last) return;
+
+    // the complete sectors are copied to an aligned buffer of each thread
+    static thread_local std::unique_ptr<uint8_t, decltype(&platform::free_aligned)> buffer(
+        (uint8_t*) allocate_aligned(copy_buffer_bytes), &platform::free_aligned);
+
+    for (uint64_t pos = first; pos < last; pos += copy_buffer_bytes) {
+        const uint64_t num = std::min(copy_buffer_bytes, last - pos);
+        std::memcpy(buffer.get(), bytes + (pos - offset), num);
+        write_aligned(buffer.get(), num, pos);
+    }
+}
+
+inline void parallel_output_file::close()
+{
+    for (auto& [index, s] : partial) {
+        write_aligned(s.bytes, sector, index * sector);
+        platform::free_aligned(s.bytes);
+    }
+
+    partial.clear();
+    if (!platform::set_size(fd, length)) throw std::runtime_error("cannot write " + path);
+    platform::close(fd);
+    fd = -1;
+}
+
+inline void array_file_reader::read_from(uint64_t i)
+{
+    beg = i;
+    end = std::min(num_values, i + std::max<uint64_t>(1, read_bytes / width));
+    const uint64_t first = beg * width, last = end * width; // the bytes [first, last) are needed
+    const uint64_t read_beg = direct ? (first / sector) * sector : first;
+    const uint64_t read_end = direct ? div_ceil(last, sector) * sector : last;
+    const uint64_t num_read = pread_fully(fd, buffer, read_end - read_beg, read_beg);
+    if (read_beg + num_read < last) throw std::runtime_error("cannot read a file");
+    if (!direct) platform::drop_cached(fd, read_beg, num_read);
+    data = buffer + (first - read_beg);
+}
+
+inline array_file_reader::array_file_reader(const std::string& path, uint64_t width, uint64_t read_bytes)
+    : width(width), mask(width >= sizeof(uint64_t) ? ~uint64_t { 0 } : (uint64_t { 1 } << (8 * width)) - 1),
+      read_bytes(read_bytes)
+{
+    std::error_code ec;
+    num_values = std::filesystem::file_size(path, ec) / width;
+    if (ec) throw std::runtime_error("cannot read " + path);
+    buffer = (uint8_t*) platform::allocate_aligned_counted(div_ceil(read_bytes, sector) * sector + 2 * sector,
+        sector);
+    if (buffer == nullptr) throw std::bad_alloc();
+    fd = open_direct_or_buffered(path, platform::file_access::read, direct);
+
+    if (fd < 0) {
+        platform::free_aligned(buffer);
+        throw std::runtime_error("cannot read " + path);
+    }
+
+    if (!direct) advise_uncached(fd);
+}
+
+inline void array_file_reader::read(uint64_t from, uint64_t to, void* dst)
+{
+    uint8_t* out = (uint8_t*) dst;
+
+    for (uint64_t i = from; i < to;) {
+        const uint8_t* src = bytes(i);
+        const uint64_t num = std::min(to, end) - i;
+        std::memcpy(out, src, num * width);
+        out += num * width;
+        i += num;
+    }
 }
 
 #endif // STRING_UTILS_MISC_FILES_TPP

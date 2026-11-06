@@ -144,19 +144,7 @@ public:
  * @param n the length of T$
  * @param rec the run
  */
-inline void read_record(const record_layout& layout, const uint8_t* p, bool last, uint64_t n, run_record& rec)
-{
-    rec.start = read_bytes(p, layout.position_bytes);
-    rec.symbol = read_bytes(p + layout.symbol, layout.symbol_bytes);
-    rec.length = (last ? n : read_bytes(p + layout.bytes, layout.position_bytes)) - rec.start;
-
-    if (layout.sa_end != layout.sa_start) {
-        rec.sa_start = read_bytes(p + layout.sa_start, layout.position_bytes);
-        rec.sa_end = read_bytes(p + layout.sa_end, layout.position_bytes);
-    }
-
-    if (layout.bytes != layout.lcp) rec.lcp = read_bytes(p + layout.lcp, layout.position_bytes);
-}
+inline void read_record(const record_layout& layout, const uint8_t* p, bool last, uint64_t n, run_record& rec);
 
 /**
  * @brief reads the runs of a file in the plain format in order, from any run on
@@ -188,14 +176,7 @@ public:
     bool done() const { return next_run >= end_run; }
 
     // reads the next run
-    void next(run_record& rec)
-    {
-        const uint64_t i = next_run++;
-        const bool last = i + 1 == file->r();
-        const uint64_t beg = offset + i * layout.bytes;
-        const uint8_t* p = in.read_ahead(beg, beg + layout.bytes + (last ? 0 : layout.position_bytes));
-        read_record(layout, p, last, file->n(), rec);
-    }
+    void next(run_record& rec);
 };
 
 /**
@@ -248,27 +229,7 @@ public:
     bool done() const { return next_run >= end_run; }
 
     // reads the next run
-    void next(run_record& rec)
-    {
-        const uint64_t i = next_run++;
-        const uint64_t b = i / file->fields().runs_per_block;
-        if (b != block) load_block(b);
-        const uint64_t k = i - b * file->fields().runs_per_block;
-        rec.start = starts[k];
-        rec.length = starts[k + 1] - starts[k];
-        rec.symbol = symbols[k];
-
-        if (with_sa) {
-            rec.sa_start = sa_value(sa_starts_in, sa_starts_offset, i);
-            rec.sa_end = sa_value(sa_ends_in, sa_ends_offset, i);
-        }
-
-        if (with_lcp) {
-            const uint64_t L = file->fields().lcp_values_per_block, c = i / L;
-            if (c != current_lcp_block) load_lcp_block(c);
-            rec.lcp = lcps[i - c * L];
-        }
-    }
+    void next(run_record& rec);
 };
 
 /**
@@ -403,15 +364,7 @@ protected:
     }
 
     // returns the start, the length and the symbol of run i (one fetch)
-    run_record run_and_length(uint64_t i)
-    {
-        const run_data_file& f = file();
-        const uint64_t R = f.fields().runs_per_block, b = i / R, k = i - b * R;
-        const run_block blk = run_block_at(b);
-        const uint64_t start = blk.start(k);
-        const uint64_t next = k + 1 < f.runs_in_block(b) ? blk.start(k + 1) : f.block_start(b + 1) - f.block_start(b);
-        return { .start = f.block_start(b) + start, .length = next - start, .symbol = blk.symbol(k) };
-    }
+    run_record run_and_length(uint64_t i);
 
 public:
     template <typename... args_t>
@@ -454,18 +407,7 @@ public:
     }
 
     // returns run i with all values the file stores
-    run_record record(uint64_t i)
-    {
-        run_record rec = run_and_length(i);
-
-        if (file().has_sa_samples()) {
-            rec.sa_start = sa_start(i);
-            rec.sa_end = sa_end(i);
-        }
-
-        if (file().has_lcp_samples()) rec.lcp = lcp(i);
-        return rec;
-    }
+    run_record record(uint64_t i);
 };
 
 // a source of compressed_access that reads the sections from the disk (one pread per get)
@@ -583,18 +525,7 @@ public:
     }
 
     // returns the run containing the BWT position j (j < n)
-    uint64_t run_of(uint64_t j) const
-    {
-        uint64_t lo = 0, hi = runs.size(); // start(lo) <= j < start(hi)
-
-        while (hi - lo > 1) {
-            const uint64_t mid = lo + (hi - lo) / 2;
-            if (runs.get<start_field>(mid) <= j) lo = mid;
-            else hi = mid;
-        }
-
-        return lo;
-    }
+    uint64_t run_of(uint64_t j) const;
 
     uint64_t sa_start(uint64_t i) const { return runs.get<sa_start_field>(i); }
     uint64_t sa_end(uint64_t i) const { return runs.get<sa_end_field>(i); }

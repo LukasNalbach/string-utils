@@ -169,14 +169,7 @@ private:
     public:
         explicit reader(const mapped_byte_source& source) : source(source), bytes(source.text.new_reader()) { }
 
-        void read(uint64_t pos, uint64_t len, sym_t* dst) override
-        {
-            for (uint64_t i = 0; i < len; i += read_block_size) {
-                const uint64_t block_len = std::min(read_block_size, len - i);
-                const uint8_t* block = bytes->view(pos + i, block_len);
-                for (uint64_t j = 0; j < block_len; j++) dst[i + j] = source.map[block[j]];
-            }
-        }
+        void read(uint64_t pos, uint64_t len, sym_t* dst) override;
     };
 
 public:

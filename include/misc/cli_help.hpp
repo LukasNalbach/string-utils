@@ -97,14 +97,7 @@ public:
      * @param description what the mode does (wrapped)
      * @param usage the usage line, e.g. "tool count [options] <index_file> <patterns_file>"
      */
-    void intro(std::string_view description, std::string_view usage)
-    {
-        wrap(description, 0);
-        new_line();
-        new_line();
-        *out << "usage: " << usage;
-        new_line();
-    }
+    void intro(std::string_view description, std::string_view usage);
 
     /**
      * @brief prints the heading of a group of options
@@ -123,26 +116,7 @@ public:
      * @param values the values it takes, e.g. "integer >= 1 (default: 1)"; empty for an option without a value
      * @param explanation what it does (wrapped; a '\n' starts a new paragraph)
      */
-    void option(std::string_view name, std::string_view values, std::string_view explanation = "")
-    {
-        pad_to(help_indent);
-        *out << name;
-        column += name.size();
-
-        if (column + 1 > help_column) new_line();
-        pad_to(help_column);
-        if (!values.empty()) {
-            wrap(values, help_column);
-            if (!explanation.empty()) new_line();
-        }
-
-        if (!explanation.empty()) {
-            pad_to(help_column);
-            wrap(explanation, help_column);
-        }
-
-        new_line();
-    }
+    void option(std::string_view name, std::string_view values, std::string_view explanation = "");
 
     // prints the option -p <threads> (the number of threads, see threads_values)
     void option_threads() { option("-p <threads>", threads_values); }
@@ -192,41 +166,7 @@ private:
      * @param words the words, separated by spaces; a '\n' ends the line
      * @param indent the column at which continued lines start
      */
-    void wrap(std::string_view words, uint64_t indent)
-    {
-        uint64_t i = 0;
-
-        while (i < words.size()) {
-            if (words[i] == '\n') {
-                new_line();
-                pad_to(indent);
-                i++;
-                continue;
-            }
-
-            if (words[i] == ' ') {
-                i++;
-                continue;
-            }
-
-            uint64_t j = i;
-            while (j < words.size() && words[j] != ' ' && words[j] != '\n') j++;
-            const uint64_t length = j - i;
-            const bool first = column <= indent;
-
-            if (!first && column + 1 + length > width) {
-                new_line();
-                pad_to(indent);
-            } else if (!first) {
-                *out << ' ';
-                column++;
-            }
-
-            *out << words.substr(i, length);
-            column += length;
-            i = j;
-        }
-    }
+    void wrap(std::string_view words, uint64_t indent);
 
     // ends the current line
     void new_line()
@@ -272,18 +212,7 @@ inline usage_error unknown_option(const std::string& option) { return usage_erro
  * @throws usage_error "<option> expects an integer >= <min>" or "<option> expects an integer in [<min>, <max>]"
  */
 inline uint64_t parse_integer_option(const std::string& option, std::string_view text, uint64_t min = 0,
-    uint64_t max = std::numeric_limits<uint64_t>::max())
-{
-    uint64_t value = 0;
-    const auto [stop, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-
-    if (text.empty() || error != std::errc() || stop != text.data() + text.size() || value < min || value > max) {
-        throw usage_error(option + " expects an integer " + (max == std::numeric_limits<uint64_t>::max()
-            ? ">= " + std::to_string(min) : "in [" + std::to_string(min) + ", " + std::to_string(max) + "]"));
-    }
-
-    return value;
-}
+    uint64_t max = std::numeric_limits<uint64_t>::max());
 
 /**
  * @brief parses the value of an option as a decimal number (independently of the locale, see parse_double)
@@ -294,15 +223,7 @@ inline uint64_t parse_integer_option(const std::string& option, std::string_view
  * @return the value
  * @throws usage_error "<option> expects a number in [<min>, <max>]"
  */
-inline double parse_number_option(const std::string& option, std::string_view text, double min, double max)
-{
-    double value = 0;
-
-    if (!parse_double(text, value) || !(value >= min && value <= max))
-        throw usage_error(option + " expects a number in [" + help_value(min) + ", " + help_value(max) + "]");
-
-    return value;
-}
+inline double parse_number_option(const std::string& option, std::string_view text, double min, double max);
 
 /** @brief reads the arguments of a mode from left to right */
 class cli_arguments {
@@ -386,14 +307,7 @@ enum class fasta_option { on, off, detect };
  * @param args the arguments, positioned after -fasta
  * @throws usage_error "-fasta expects on, off or auto"
  */
-inline fasta_option read_fasta_option(cli_arguments& args)
-{
-    const std::string mode = args.value("-fasta");
-    if (mode == "on") return fasta_option::on;
-    if (mode == "off") return fasta_option::off;
-    if (mode == "auto") return fasta_option::detect;
-    throw usage_error("-fasta expects on, off or auto");
-}
+inline fasta_option read_fasta_option(cli_arguments& args);
 
 /**
  * @brief reads the value of an option that is switched on or off
@@ -426,28 +340,7 @@ inline bool is_fasta_line_symbol(char c)
  *        direct_input_filebuf::buffer_length bytes of the file are read
  * @param path the path of the file
  */
-inline bool starts_like_fasta(const std::string& path)
-{
-    constexpr uint64_t max_bytes = direct_input_filebuf::buffer_length;
-    direct_ifstream in(path, std::ios_base::in, max_bytes);
-    std::string start(max_bytes, '\0');
-    in.read(start.data(), std::streamsize(max_bytes));
-    start.resize(uint64_t(in.gcount()));
-    if (!start.starts_with(fasta_header_start)) return false;
-    uint64_t line_start = 0; // the start of the current line in start
-
-    while (line_start < start.size()) {
-        const uint64_t line_end = std::min(start.find('\n', line_start), start.size());
-
-        if (start[line_start] != fasta_header_start) {
-            return std::all_of(start.begin() + line_start, start.begin() + line_end, is_fasta_line_symbol);
-        }
-
-        line_start = line_end + 1;
-    }
-
-    return true;
-}
+inline bool starts_like_fasta(const std::string& path);
 
 /**
  * @brief returns whether a file is read in the FASTA mode
@@ -498,33 +391,8 @@ void require_created(const stream_t& stream, const std::string& path)
  * @return the exit code
  */
 template <typename help_fnc_t, typename run_fnc_t>
-int run_cli(int argc, char** argv, help_fnc_t print_help, run_fnc_t run)
-{
-    if (argc < 2) {
-        print_help(std::cout);
-        return 0;
-    }
+int run_cli(int argc, char** argv, help_fnc_t print_help, run_fnc_t run);
 
-    for (int i = 1; i < argc; i++) {
-        if (std::string_view(argv[i]) == "-h" || std::string_view(argv[i]) == "--help") {
-            print_help(std::cout);
-            return 0;
-        }
-    }
-
-    try {
-        run();
-        return 0;
-    } catch (const usage_error& error) {
-        end_phase_line();
-        std::cerr << "error: " << error.what() << "\n\n";
-        print_help(std::cerr);
-    } catch (const std::exception& error) {
-        end_phase_line();
-        std::cerr << "error: " << error.what() << std::endl;
-    }
-
-    return 1;
-}
+#include <misc/cli_help.tpp>
 
 #endif // STRING_UTILS_MISC_CLI_HELP_HPP

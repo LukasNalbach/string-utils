@@ -287,4 +287,18 @@ inline void write_compressed_runs(const std::string& records_name, const std::st
 
 } // namespace rlbwt
 
+namespace rlbwt {
+
+inline void encoded_blocks::clear()
+{
+    runs.clear();
+    lcps.clear();
+    sa_starts.clear();
+    sa_ends.clear();
+    run_sizes.clear();
+    lcp_sizes.clear();
+}
+
+} // namespace rlbwt
+
 #endif // STRING_UTILS_RLBWT_COMPRESSED_WRITER_TPP

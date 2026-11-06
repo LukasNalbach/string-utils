@@ -153,18 +153,7 @@ public:
     }
 
     // returns the largest b such that block_start(b) <= j (j < n)
-    uint64_t block_of_position(uint64_t j) const
-    {
-        uint64_t lo = 0, hi = blocks; // block_start(lo) <= j < block_start(hi)
-
-        while (hi - lo > 1) {
-            const uint64_t mid = lo + (hi - lo) / 2;
-            if (block_start(mid) <= j) lo = mid;
-            else hi = mid;
-        }
-
-        return lo;
-    }
+    uint64_t block_of_position(uint64_t j) const;
 
     // compressed: returns the offset (in bytes) of block b of runs in section_run_blocks (its size for num_blocks())
     uint64_t run_block_offset(uint64_t b) const

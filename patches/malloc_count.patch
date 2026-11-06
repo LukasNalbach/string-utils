@@ -1,8 +1,15 @@
 diff --git a/malloc_count.c b/malloc_count.c
-index a1deac1..cb485a6 100644
+index a1deac1..f3aad3d 100644
 --- a/malloc_count.c
 +++ b/malloc_count.c
-@@ -38,10 +38,10 @@
+@@ -32,16 +32,17 @@
+ #include <stdio.h>
+ #include <locale.h>
+ #include <dlfcn.h>
++#include <errno.h>
+ 
+ #include "malloc_count.h"
+ 
  /* user-defined options for output malloc()/free() operations to stderr */
  
  static const int log_operations = 0;    /* <-- set this to 1 for log output */
@@ -15,7 +22,7 @@ index a1deac1..cb485a6 100644
  
  /* to each allocation additional data is added for bookkeeping. due to
   * alignment requirements, we can optionally add more than just one integer.
-@@ -64,6 +64,10 @@ static aligned_alloc_type real_aligned_alloc = NULL;
+@@ -64,6 +65,10 @@ static aligned_alloc_type real_aligned_alloc = NULL;
  static free_type real_free = NULL;
  static realloc_type real_realloc = NULL;
  
@@ -26,7 +33,7 @@ index a1deac1..cb485a6 100644
  /* a sentinel value prefixed to each allocation */
  static const size_t sentinel = 0xDEADC0DE;
  
-@@ -90,15 +94,23 @@ static void inc_count(size_t inc)
+@@ -90,15 +95,23 @@ static void inc_count(size_t inc)
  {
  #if THREAD_SAFE_GCC_INTRINSICS
      long long mycurr = __sync_add_and_fetch(&curr, inc);
@@ -52,7 +59,7 @@ index a1deac1..cb485a6 100644
  }
  
  /* decrement allocation to statistics */
-@@ -162,11 +174,23 @@ extern void* malloc(size_t size)
+@@ -162,11 +175,23 @@ extern void* malloc(size_t size)
  
      if (size == 0) return NULL;
  
@@ -76,10 +83,14 @@ index a1deac1..cb485a6 100644
          inc_count(size);
          if (log_operations && size >= log_operations_threshold) {
              fprintf(stderr, PPREFIX "malloc(%'lld) = %p   (current %'lld)\n",
-@@ -224,6 +248,12 @@ extern void* aligned_alloc(size_t al, size_t size)
+@@ -222,8 +247,14 @@ extern void* aligned_alloc(size_t al, size_t size)
+         if (al >= alignment) {
+             extra_alignment = al - alignment;
          }
-         /* call real aligned_alloc procedure in libc */
-         ret = (*real_aligned_alloc)(al, size + alignment + extra_alignment);
+-        /* call real aligned_alloc procedure in libc */
+-        ret = (*real_aligned_alloc)(al, size + alignment + extra_alignment);
++        /* call real aligned_alloc procedure in libc (with a multiple of al bytes, as C11 requires) */
++        ret = (*real_aligned_alloc)(al, (size + alignment + extra_alignment + al - 1) / al * al);
 +
 +        if (!ret) {
 +            fprintf(stderr, PPREFIX "aligned_alloc(%'lld) failed (current %'lld)\n",
@@ -89,7 +100,16 @@ index a1deac1..cb485a6 100644
          ret = (char*)ret + extra_alignment;
  
          inc_count(size);
-@@ -277,13 +307,13 @@ extern void free(void* ptr)
+@@ -245,7 +276,7 @@ extern void* aligned_alloc(size_t al, size_t size)
+ int posix_memalign(void **memptr, size_t al, size_t size)
+ {
+     *memptr = aligned_alloc(al, size);
+-    return 0;
++    return *memptr != NULL || size == 0 ? 0 : ENOMEM;
+ }
+ 
+ /* exported memalign symbol that overrides loading from libc */
+@@ -277,13 +308,13 @@ extern void free(void* ptr)
          return;
      }
  
@@ -108,7 +128,7 @@ index a1deac1..cb485a6 100644
      size = *(size_t*)ptr;
      extra_alignment = *(size_t*)(ptr + sizeof(size_t));
      ptr = (char*)ptr - extra_alignment;
-@@ -372,6 +402,12 @@ extern void* realloc(void* ptr, size_t size)
+@@ -372,6 +403,12 @@ extern void* realloc(void* ptr, size_t size)
  
      newptr = (*real_realloc)(ptr, size + alignment + extra_alignment);
  
@@ -121,7 +141,7 @@ index a1deac1..cb485a6 100644
      if (log_operations && size >= log_operations_threshold)
      {
          if (newptr == ptr)
-@@ -393,6 +429,8 @@ static __attribute__((constructor)) void init(void)
+@@ -393,6 +430,8 @@ static __attribute__((constructor)) void init(void)
  {
      char *error;
  
@@ -130,7 +150,7 @@ index a1deac1..cb485a6 100644
      setlocale(LC_NUMERIC, ""); /* for better readable numbers */
  
      dlerror();
-@@ -424,9 +462,11 @@ static __attribute__((constructor)) void init(void)
+@@ -424,9 +463,11 @@ static __attribute__((constructor)) void init(void)
  
  static __attribute__((destructor)) void finish(void)
  {

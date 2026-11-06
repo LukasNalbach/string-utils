@@ -167,8 +167,12 @@ inline void resize_for_overwrite(container_t& container, uint64_t size)
     }
 }
 
-// the size of a cache line in bytes
+// the size of a cache line in bytes (Apple silicon: 128)
+#if defined(__APPLE__) && defined(__aarch64__)
+inline constexpr uint64_t cache_line_bytes = 128;
+#else
 inline constexpr uint64_t cache_line_bytes = 64;
+#endif
 
 /**
  * @brief stores the data of one thread in its own cache lines (aligned to a cache line, and padded to a multiple of
