@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file compressor_cli.tpp
+ * @brief the command-line interface of the compressors: help, options, compressing and extracting
+ */
+
 #ifndef STRING_UTILS_MISC_COMPRESSOR_CLI_TPP
 #define STRING_UTILS_MISC_COMPRESSOR_CLI_TPP
 

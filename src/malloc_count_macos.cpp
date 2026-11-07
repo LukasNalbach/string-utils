@@ -24,11 +24,12 @@
  * SOFTWARE.
  */
 
-/*
- * the operators new and delete for malloc_count on macOS: the libraries of macOS are linked with two-level namespaces,
- * so the operator new of libc++ calls the malloc of the system, not the malloc of malloc_count.c in the executable.
- * The operators replaced here (the executable's definitions replace those of libc++ in all images) call malloc,
- * aligned_alloc and free, which malloc_count counts.
+/**
+ * @file malloc_count_macos.cpp
+ * @brief the operators new and delete for malloc_count on macOS: the libraries of macOS are linked with two-level
+ *        namespaces, so the operator new of libc++ calls the malloc of the system, not the malloc of malloc_count.c in
+ *        the executable. The operators replaced here (the executable's definitions replace those of libc++ in all
+ *        images) call malloc, aligned_alloc and free, which malloc_count counts.
  */
 
 // macOS only (the build adds this file only on macOS)

@@ -24,8 +24,11 @@
  * SOFTWARE.
  */
 
-// Windows stand-in for <sys/resource.h> used by sdsl: getrusage reports 0; it is on the include path only on
-// Windows (cmake/settings.cmake)
+/**
+ * @file resource.h
+ * @brief Windows stand-in for <sys/resource.h> used by sdsl: getrusage reports 0; it is on the include path only on
+ *        Windows (cmake/settings.cmake)
+ */
 
 #pragma once
 

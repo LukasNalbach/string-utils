@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file temp_files.hpp
+ * @brief temporary files: their directory and their names
+ */
+
 #ifndef STRING_UTILS_MISC_TEMP_FILES_HPP
 #define STRING_UTILS_MISC_TEMP_FILES_HPP
 

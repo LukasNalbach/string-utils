@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file elias_fano_bit_vector.hpp
+ * @brief bit vector with Elias-Fano coding of the positions of its ones, with rank and select
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_ELIAS_FANO_BIT_VECTOR_HPP
 #define STRING_UTILS_DATA_STRUCTURES_ELIAS_FANO_BIT_VECTOR_HPP
 

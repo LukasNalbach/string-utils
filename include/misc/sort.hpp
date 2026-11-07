@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file sort.hpp
+ * @brief parallel and sequential sorting with ips4o and ips2ra
+ */
+
 #ifndef STRING_UTILS_MISC_SORT_HPP
 #define STRING_UTILS_MISC_SORT_HPP
 

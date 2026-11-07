@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file test-fasta.hpp
+ * @brief random FASTA files and the checks of their text for the tests
+ */
+
 #ifndef STRING_UTILS_TESTS_TEST_FASTA_HPP
 #define STRING_UTILS_TESTS_TEST_FASTA_HPP
 

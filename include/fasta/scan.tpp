@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file scan.tpp
+ * @brief scanning FASTA files: their sequences, headers and the ranges of threads
+ */
+
 #ifndef STRING_UTILS_FASTA_SCAN_TPP
 #define STRING_UTILS_FASTA_SCAN_TPP
 

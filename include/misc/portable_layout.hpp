@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file portable_layout.hpp
+ * @brief bit-fields at the positions GCC and clang give them, for file formats that are the same on all platforms
+ */
+
 #ifndef STRING_UTILS_MISC_PORTABLE_LAYOUT_HPP
 #define STRING_UTILS_MISC_PORTABLE_LAYOUT_HPP
 

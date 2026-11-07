@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file plain_bit_vector.hpp
+ * @brief uncompressed bit vector with optional rank and select support
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_PLAIN_BIT_VECTOR_HPP
 #define STRING_UTILS_DATA_STRUCTURES_PLAIN_BIT_VECTOR_HPP
 

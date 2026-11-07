@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file bits.hpp
+ * @brief bit operations: division with rounding, masks, zigzag coding and popcount
+ */
+
 #ifndef STRING_UTILS_MISC_BITS_HPP
 #define STRING_UTILS_MISC_BITS_HPP
 

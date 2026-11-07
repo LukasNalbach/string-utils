@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file repetitive_input.hpp
+ * @brief generating repetitive sequences
+ */
+
 #ifndef STRING_UTILS_MISC_REPETITIVE_INPUT_HPP
 #define STRING_UTILS_MISC_REPETITIVE_INPUT_HPP
 

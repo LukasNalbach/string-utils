@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file test-references.hpp
+ * @brief reference implementations for the tests: suffix arrays, LCP arrays and range minima
+ */
+
 #ifndef STRING_UTILS_TESTS_TEST_REFERENCES_HPP
 #define STRING_UTILS_TESTS_TEST_REFERENCES_HPP
 

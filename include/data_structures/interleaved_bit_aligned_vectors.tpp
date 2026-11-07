@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file interleaved_bit_aligned_vectors.tpp
+ * @brief the methods of interleaved_bit_aligned_vectors
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_INTERLEAVED_BIT_ALIGNED_VECTORS_TPP
 #define STRING_UTILS_DATA_STRUCTURES_INTERLEAVED_BIT_ALIGNED_VECTORS_TPP
 

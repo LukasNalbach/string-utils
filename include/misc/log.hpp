@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file log.hpp
+ * @brief logging: times, sizes, phases, progress and peak memory usage
+ */
+
 #ifndef STRING_UTILS_MISC_LOG_HPP
 #define STRING_UTILS_MISC_LOG_HPP
 

@@ -84,7 +84,42 @@ public:
      * @param code the code of the symbols
      */
     static void encode(bit_buffer& bits, const uint64_t* starts, const uint64_t* symbols, uint64_t m, uint64_t period,
-        const symbol_code& code);
+        const symbol_code& code)
+    {
+        const uint64_t span = starts[m];
+        const uint8_t low = low_bits_of(m, span);
+        // the offsets of the sampled codes relative to the first code; the last one is the largest
+        uint64_t offset = 0, last_sample = 0;
+
+        for (uint64_t k = 0; k < m; k++) {
+            if (k % period == 0) last_sample = offset;
+            offset += code.code_length(symbols[k]);
+        }
+
+        const uint8_t sample_bits = std::bit_width(last_sample);
+        bits.put(sample_bits, width_bits);
+        uint64_t prev_high = 0;
+
+        // the upper bits: (high part - previous high part) 0-bits, then a 1-bit, for each start
+        for (uint64_t k = 0; k < m; k++) {
+            const uint64_t high = starts[k] >> low;
+            bits.put_zeros(high - prev_high);
+            bits.put(1, 1);
+            prev_high = high;
+        }
+
+        bits.put_zeros(((span - 1) >> low) - prev_high);
+        for (uint64_t k = 0; k < m; k++) bits.put(starts[k] & low_mask(low), low);
+        offset = 0;
+
+        for (uint64_t k = 0; k < m; k++) {
+            if (k % period == 0 && k > 0) bits.put(offset, sample_bits);
+            offset += code.code_length(symbols[k]);
+        }
+
+        for (uint64_t k = 0; k < m; k++) code.encode(bits, symbols[k]);
+        bits.pad_to_byte();
+    }
 
     run_block() = default;
 
@@ -104,17 +139,87 @@ public:
     { }
 
     // returns the start of run k relative to the first start
-    uint64_t start(uint64_t k) const;
+    uint64_t start(uint64_t k) const
+    {
+        // the position of the k-th set upper bit
+        uint64_t pos = 0, rest = k;
+
+        while (true) {
+            const uint64_t word = read_bits(data, upper_begin + pos, max_packed_bits);
+            const uint64_t ones = std::popcount(word);
+            if (rest < ones) break;
+            rest -= ones;
+            pos += max_packed_bits;
+        }
+
+        pos += select_in_word(read_bits(data, upper_begin + pos, max_packed_bits), rest);
+        return ((pos - k) << low_bits) | read_bits(data, lows_begin + k * low_bits, low_bits);
+    }
 
     // returns the symbol of run k
-    uint64_t symbol(uint64_t k) const;
+    uint64_t symbol(uint64_t k) const
+    {
+        const uint64_t s = k / period;
+        uint64_t bit = codes_begin + (s == 0 ? 0 : read_bits(data, samples_begin + (s - 1) * sample_bits, sample_bits));
+        for (uint64_t j = s * period; j < k; j++) code->skip(data, bit);
+        return code->decode(data, bit);
+    }
 
     // returns the largest k such that start(k) <= x (x < span)
-    uint64_t predecessor(uint64_t x) const;
+    uint64_t predecessor(uint64_t x) const
+    {
+        const uint64_t h = x >> low_bits;
+        uint64_t pos = 0; // position in the upper bits of the first start with high part h (if any)
+
+        if (h > 0) {
+            // the (h-1)-th 0-bit ends the starts with high parts < h
+            uint64_t rest = h - 1;
+
+            while (true) {
+                const uint64_t word = ~read_bits(data, upper_begin + pos, max_packed_bits) & low_mask(max_packed_bits);
+                const uint64_t zeros = std::popcount(word);
+                if (rest < zeros) break;
+                rest -= zeros;
+                pos += max_packed_bits;
+            }
+
+            pos += select_in_word(~read_bits(data, upper_begin + pos, max_packed_bits) & low_mask(max_packed_bits), rest) + 1;
+        }
+
+        // the starts with high part h are at the consecutive 1-bits from pos on
+        uint64_t k = pos - h;
+        const uint64_t x_low = x & low_mask(low_bits);
+
+        while (k < m && pos < upper_bits && read_bits(data, upper_begin + pos, 1) != 0
+            && read_bits(data, lows_begin + k * low_bits, low_bits) <= x_low) {
+            k++;
+            pos++;
+        }
+
+        return k - 1;
+    }
 
     // calls fnc(start, symbol) for the runs in order (starts relative to the first one)
     template <typename fnc_t>
-    void for_each(fnc_t fnc) const;
+    void for_each(fnc_t fnc) const
+    {
+        uint64_t pos = 0; // position in the upper bits after the last set bit found
+        uint64_t bit = codes_begin; // offset of the next code
+
+        for (uint64_t k = 0; k < m; k++) {
+            uint64_t word = read_bits(data, upper_begin + pos, max_packed_bits);
+
+            while (word == 0) {
+                pos += max_packed_bits;
+                word = read_bits(data, upper_begin + pos, max_packed_bits);
+            }
+
+            pos += std::countr_zero(word);
+            const uint64_t low = read_bits(data, lows_begin + k * low_bits, low_bits);
+            fnc(((pos - k) << low_bits) | low, code->decode(data, bit));
+            pos++;
+        }
+    }
 };
 
 /**
@@ -146,7 +251,50 @@ public:
      * @param m number of values (>= 1)
      * @param position_bits bits of base
      */
-    static void encode(bit_buffer& bits, const uint64_t* values, uint64_t m, uint8_t position_bits);
+    static void encode(bit_buffer& bits, const uint64_t* values, uint64_t m, uint8_t position_bits)
+    {
+        const auto [min_it, max_it] = std::minmax_element(values, values + m);
+        const uint64_t base = *min_it;
+        const uint8_t total = std::bit_width(*max_it - base);
+        /* [0..total] differ[j] = number of k in [1..m-1] such that the bit width of (values[k] - base) xor
+           (values[k-1] - base) is j: the high parts of the values k-1 and k differ for each split < j */
+        std::vector<uint64_t> differ(total + 1, 0);
+        for (uint64_t k = 1; k < m; k++) differ[std::bit_width((values[k] - base) ^ (values[k - 1] - base))]++;
+
+        // the split with the fewest bits; the split total stores no high parts
+        uint8_t split = total;
+        uint64_t best = m * total;
+        uint64_t runs = 1; // number of runs of equal high parts for the split in the loop
+
+        for (uint8_t b = total; b-- > 0;) {
+            runs += differ[b + 1];
+            const uint64_t size = m * b + m + runs * (total - b);
+
+            if (size < best) {
+                best = size;
+                split = b;
+            }
+        }
+
+        const uint8_t high = total - split;
+        bits.put(total, width_bits);
+        bits.put(split, width_bits);
+        bits.put(base, position_bits);
+        for (uint64_t k = 0; k < m; k++) bits.put((values[k] - base) & low_mask(split), split);
+
+        if (high > 0) {
+            for (uint64_t k = 0; k < m; k++) {
+                bits.put(k == 0 || ((values[k] - base) >> split) != ((values[k - 1] - base) >> split), 1);
+            }
+
+            for (uint64_t k = 0; k < m; k++) {
+                const uint64_t part = (values[k] - base) >> split;
+                if (k == 0 || part != ((values[k - 1] - base) >> split)) bits.put(part, high);
+            }
+        }
+
+        bits.pad_to_byte();
+    }
 
     lcp_block() = default;
 
@@ -164,15 +312,39 @@ public:
     { }
 
     // returns value k
-    uint64_t value(uint64_t k) const;
+    uint64_t value(uint64_t k) const
+    {
+        const uint64_t low = read_bits(data, lows_begin + k * split, split);
+        if (high == 0) return base + low;
+        // the number of runs of equal high parts that start at the values 0..k
+        uint64_t runs = 0, pos = 0;
+
+        for (; pos + max_packed_bits <= k + 1; pos += max_packed_bits) {
+            runs += std::popcount(read_bits(data, starts_begin + pos, max_packed_bits));
+        }
+
+        runs += std::popcount(read_bits(data, starts_begin + pos, uint8_t(k + 1 - pos)));
+        return base + ((read_bits(data, highs_begin + (runs - 1) * high, high) << split) | low);
+    }
 
     // calls fnc(value) for the values in order
     template <typename fnc_t>
-    void for_each(fnc_t fnc) const;
+    void for_each(fnc_t fnc) const
+    {
+        uint64_t run = 0; // number of runs of equal high parts started so far
+        uint64_t high_part = 0; // the high part of the current run
+
+        for (uint64_t k = 0; k < m; k++) {
+            if (high > 0 && read_bits(data, starts_begin + k, 1) != 0) {
+                high_part = read_bits(data, highs_begin + run * high, high) << split;
+                run++;
+            }
+
+            fnc(base + (high_part | read_bits(data, lows_begin + k * split, split)));
+        }
+    }
 };
 
 } // namespace rlbwt
-
-#include <rlbwt/blocks.tpp>
 
 #endif // STRING_UTILS_RLBWT_BLOCKS_HPP

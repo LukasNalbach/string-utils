@@ -40,11 +40,16 @@
 #include <ostream>
 #include <stdexcept>
 #include <vector>
+#include <cstring>
+#include <limits>
+#include <string>
 
 #include <coding/byte_codes.hpp>
 #include <misc/log.hpp>
 #include <rlbwt/run_data_file.hpp>
 #include <rlbwt/types.hpp>
+#include <omp.h>
+#include <misc/bits.hpp>
 
 namespace rlbwt {
 
@@ -58,7 +63,33 @@ using byte_set = std::array<bool, num_byte_values>;
  * @param progress if not nullptr, counts the bytes read
  */
 inline byte_set occurring_bytes(const text_source<uint8_t>& text, uint64_t num_threads,
-    phase_progress* progress = nullptr);
+    phase_progress* progress = nullptr)
+{
+    const uint64_t n = text.size();
+    byte_set occurs {};
+    if (n == 0) return occurs;
+    const uint64_t blocks = div_ceil(n, read_block_size);
+
+    #pragma omp parallel num_threads(std::max<uint64_t>(1, std::min(num_threads, blocks)))
+    {
+        const std::unique_ptr<text_source<uint8_t>::reader> reader = text.new_reader();
+        byte_set seen {}; // the bytes this thread has read
+
+        #pragma omp for schedule(dynamic)
+        for (uint64_t b = 0; b < blocks; b++) {
+            const uint64_t pos = b * read_block_size;
+            const uint64_t len = std::min(read_block_size, n - pos);
+            const uint8_t* block = reader->view(pos, len);
+            for (uint64_t i = 0; i < len; i++) seen[block[i]] = true;
+            if (progress != nullptr) progress->advance(len);
+        }
+
+        #pragma omp critical
+        for (uint64_t c = 0; c < num_byte_values; c++) occurs[c] = occurs[c] || seen[c];
+    }
+
+    return occurs;
+}
 
 /**
  * @brief returns whether a byte below min_symbol occurs in a text
@@ -81,7 +112,16 @@ private:
     std::array<uint16_t, num_byte_values> symbol {}; // [0..255] symbol[c] = the symbol of the byte c (0: c does not occur)
 
     // sets the map of the bytes that occur, the smallest to min_symbol; returns whether the symbols fit into 16 bits
-    bool assign(const byte_set& occurs, uint64_t min_symbol);
+    bool assign(const byte_set& occurs, uint64_t min_symbol)
+    {
+        smallest = min_symbol;
+        bytes.clear();
+        symbol.fill(0);
+        for (uint64_t c = 0; c < num_byte_values; c++) if (occurs[c]) bytes.push_back(uint8_t(c));
+        if (min_symbol > uint64_t(std::numeric_limits<uint16_t>::max()) + 1 - sigma()) return false;
+        for (uint64_t i = 0; i < sigma(); i++) symbol[bytes[i]] = uint16_t(min_symbol + i);
+        return true;
+    }
 
 public:
     byte_map() = default;
@@ -148,7 +188,25 @@ public:
      * @return whether the file stores the section with distinct bytes in increasing order and symbols that fit into
      *         16 bits
      */
-    bool load(const run_data_file& file);
+    bool load(const run_data_file& file)
+    {
+        std::string section_bytes;
+        uint64_t s = 0; // the symbol of the smallest byte
+        if (!file.read_section(section_byte_map, section_bytes) || section_bytes.size() < sizeof(s)
+            || section_bytes.size() - sizeof(s) > num_byte_values) {
+            return false;
+        }
+
+        std::memcpy(&s, section_bytes.data(), sizeof(s));
+        byte_set occurs {};
+
+        for (uint64_t i = sizeof(s); i < section_bytes.size(); i++) {
+            if (i > sizeof(s) && uint8_t(section_bytes[i]) <= uint8_t(section_bytes[i - 1])) return false;
+            occurs[uint8_t(section_bytes[i])] = true;
+        }
+
+        return assign(occurs, s);
+    }
 };
 
 /**
@@ -169,7 +227,14 @@ private:
     public:
         explicit reader(const mapped_byte_source& source) : source(source), bytes(source.text.new_reader()) { }
 
-        void read(uint64_t pos, uint64_t len, sym_t* dst) override;
+        void read(uint64_t pos, uint64_t len, sym_t* dst) override
+        {
+            for (uint64_t i = 0; i < len; i += read_block_size) {
+                const uint64_t block_len = std::min(read_block_size, len - i);
+                const uint8_t* block = bytes->view(pos + i, block_len);
+                for (uint64_t j = 0; j < block_len; j++) dst[i + j] = source.map[block[j]];
+            }
+        }
     };
 
 public:
@@ -201,10 +266,18 @@ public:
  * @return the result of build
  */
 template <typename build_t>
-auto build_with_byte_map(const byte_set& occurs, uint64_t min_symbol, output_params& prm, build_t build);
+auto build_with_byte_map(const byte_set& occurs, uint64_t min_symbol, output_params& prm, build_t build)
+{
+    if (!needs_byte_map(occurs, min_symbol)) {
+        const std::array<uint8_t, num_byte_values>* no_map = nullptr;
+        return build(no_map);
+    }
+
+    const byte_map map(occurs, min_symbol);
+    prm.extra_sections.push_back(map.section());
+    return map.with_symbols([&](const auto& symbols) { return build(&symbols); });
+}
 
 } // namespace rlbwt
-
-#include <rlbwt/byte_map.tpp>
 
 #endif // STRING_UTILS_RLBWT_BYTE_MAP_HPP

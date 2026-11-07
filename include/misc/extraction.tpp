@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file extraction.tpp
+ * @brief extracting ranges of a compressed text to files
+ */
+
 #ifndef STRING_UTILS_MISC_EXTRACTION_TPP
 #define STRING_UTILS_MISC_EXTRACTION_TPP
 

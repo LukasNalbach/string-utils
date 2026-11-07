@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file utils.hpp
+ * @brief common types: the arrays of compressed representations, directions and key functors
+ */
+
 #ifndef STRING_UTILS_MISC_UTILS_HPP
 #define STRING_UTILS_MISC_UTILS_HPP
 

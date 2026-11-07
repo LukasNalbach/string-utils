@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file test-inputs.hpp
+ * @brief random inputs for the tests: sizes, repetitive sequences and alphabets
+ */
+
 #ifndef STRING_UTILS_TESTS_TEST_INPUTS_HPP
 #define STRING_UTILS_TESTS_TEST_INPUTS_HPP
 

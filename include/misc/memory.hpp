@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file memory.hpp
+ * @brief memory: allocation without initialization, aligned allocators and huge pages
+ */
+
 #ifndef STRING_UTILS_MISC_MEMORY_HPP
 #define STRING_UTILS_MISC_MEMORY_HPP
 

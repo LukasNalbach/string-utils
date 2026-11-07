@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file readers.tpp
+ * @brief the readers of the runs file: from disk with O_DIRECT, in memory and compressed
+ */
+
 #ifndef STRING_UTILS_RLBWT_READERS_TPP
 #define STRING_UTILS_RLBWT_READERS_TPP
 

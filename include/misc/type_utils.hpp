@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file type_utils.hpp
+ * @brief compile-time utilities: loops over constants and the selection of types
+ */
+
 #ifndef STRING_UTILS_MISC_TYPE_UTILS_HPP
 #define STRING_UTILS_MISC_TYPE_UTILS_HPP
 

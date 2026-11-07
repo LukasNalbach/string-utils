@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file files.hpp
+ * @brief file I/O: the page cache, O_DIRECT streams and reading and writing at positions
+ */
+
 #ifndef STRING_UTILS_MISC_FILES_HPP
 #define STRING_UTILS_MISC_FILES_HPP
 

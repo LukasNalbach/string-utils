@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file files.tpp
+ * @brief the methods of page_cache_dropper and of the O_DIRECT stream buffers
+ */
+
 #ifndef STRING_UTILS_MISC_FILES_TPP
 #define STRING_UTILS_MISC_FILES_TPP
 

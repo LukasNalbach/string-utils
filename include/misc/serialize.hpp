@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file serialize.hpp
+ * @brief serialization: stream I/O in chunks, vectors and strings
+ */
+
 #ifndef STRING_UTILS_MISC_SERIALIZE_HPP
 #define STRING_UTILS_MISC_SERIALIZE_HPP
 

@@ -24,8 +24,11 @@
  * SOFTWARE.
  */
 
-// Windows stand-in for <sys/mman.h> used by sux: mmap, munmap and mremap via calloc, free and realloc; it is on the
-// include path only on Windows (cmake/settings.cmake)
+/**
+ * @file mman.h
+ * @brief Windows stand-in for <sys/mman.h> used by sux: mmap, munmap and mremap via calloc, free and realloc; it is on
+ *        the include path only on Windows (cmake/settings.cmake)
+ */
 
 #pragma once
 

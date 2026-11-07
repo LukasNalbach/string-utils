@@ -24,7 +24,11 @@
  * SOFTWARE.
  */
 
-// the Windows functions of misc/platform.hpp that need <windows.h> (compiled only on Windows, see CMakeLists.txt)
+/**
+ * @file platform_windows.cpp
+ * @brief the Windows functions of misc/platform.hpp that need <windows.h> (compiled only on Windows, see
+ *        CMakeLists.txt)
+ */
 
 // Windows only (the build adds this file only on Windows)
 #ifdef _WIN32

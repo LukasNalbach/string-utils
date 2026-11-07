@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file interleaved_bit_aligned_vectors.hpp
+ * @brief arrays of the same length with bit-aligned entries, stored interleaved
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_INTERLEAVED_BIT_ALIGNED_VECTORS_HPP
 #define STRING_UTILS_DATA_STRUCTURES_INTERLEAVED_BIT_ALIGNED_VECTORS_HPP
 

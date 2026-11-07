@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file test-fuzz.hpp
+ * @brief the fuzz test driver run_fuzz and its budgets of time and iterations
+ */
+
 #ifndef STRING_UTILS_TESTS_TEST_FUZZ_HPP
 #define STRING_UTILS_TESTS_TEST_FUZZ_HPP
 

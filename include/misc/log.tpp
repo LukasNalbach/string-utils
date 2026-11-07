@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file log.tpp
+ * @brief the formatting functions of log.hpp and the methods of its progress and peak classes
+ */
+
 #ifndef STRING_UTILS_MISC_LOG_TPP
 #define STRING_UTILS_MISC_LOG_TPP
 

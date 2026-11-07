@@ -24,8 +24,11 @@
  * SOFTWARE.
  */
 
-// replacement of external/malloc_count/malloc_count.c that does not count (<prefix>_USE_MALLOC_COUNT=OFF, or Windows
-// with the dynamic C runtime): it does not override malloc and free, and all functions return 0
+/**
+ * @file malloc_count_stub.c
+ * @brief replacement of external/malloc_count/malloc_count.c that does not count (<prefix>_USE_MALLOC_COUNT=OFF, or
+ *        Windows with the dynamic C runtime): it does not override malloc and free, and all functions return 0
+ */
 
 #include <malloc_count.h>
 

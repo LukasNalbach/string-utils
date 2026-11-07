@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file packed_integers.hpp
+ * @brief unsigned and signed integers of 1 to 8 bytes, loading and storing them
+ */
+
 #ifndef STRING_UTILS_MISC_PACKED_INTEGERS_HPP
 #define STRING_UTILS_MISC_PACKED_INTEGERS_HPP
 

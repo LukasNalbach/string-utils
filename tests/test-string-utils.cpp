@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file test-string-utils.cpp
+ * @brief fuzz tests of string-utils
+ */
+
 #include <cstdint>
 #include <cstring>
 #include <random>

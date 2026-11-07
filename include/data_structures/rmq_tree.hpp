@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file rmq_tree.hpp
+ * @brief range minimum queries with a min-augmented tau-ary tree
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_RMQ_TREE_HPP
 #define STRING_UTILS_DATA_STRUCTURES_RMQ_TREE_HPP
 

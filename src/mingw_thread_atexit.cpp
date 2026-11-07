@@ -24,8 +24,9 @@
  * SOFTWARE.
  */
 
-/*
- * __cxa_thread_atexit for MinGW-w64 with POSIX threads (compiled only there, see CMakeLists.txt).
+/**
+ * @file mingw_thread_atexit.cpp
+ * @brief __cxa_thread_atexit for MinGW-w64 with POSIX threads (compiled only there, see CMakeLists.txt).
  *
  * GCC calls __cxa_thread_atexit to register the destructor of a thread_local object. MinGW-w64 runs these destructors
  * in a TLS callback when the thread ends, but GCC stores thread_local objects in emulated TLS (emutls), whose memory is

@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file parse.hpp
+ * @brief parsing numbers independently of the locale, and environment variables
+ */
+
 #ifndef STRING_UTILS_MISC_PARSE_HPP
 #define STRING_UTILS_MISC_PARSE_HPP
 

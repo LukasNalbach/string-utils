@@ -24,7 +24,11 @@
  * SOFTWARE.
  */
 
-// compiles the explicit instantiations of the sort functions declared extern in misc/sort.hpp
+/**
+ * @file sort.cpp
+ * @brief compiles the explicit instantiations of the sort functions declared extern in misc/sort.hpp
+ */
+
 #include <misc/sort.hpp>
 
 STRING_UTILS_SORT_INSTANTIATIONS()

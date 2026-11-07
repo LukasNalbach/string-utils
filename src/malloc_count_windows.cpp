@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file malloc_count_windows.cpp
+ * @brief malloc_count on Windows: counting the allocations of the process
+ */
+
 /*
  * malloc_count for Windows (the interface of external/malloc_count/malloc_count.h): counts the bytes that the program
  * has allocated and their peak. It replaces the heap functions of the C runtime in the executable: malloc, calloc,

@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file segmented_vector.hpp
+ * @brief a vector stored in blocks that are never moved, written by one or several threads
+ */
+
 #ifndef STRING_UTILS_DATA_STRUCTURES_SEGMENTED_VECTOR_HPP
 #define STRING_UTILS_DATA_STRUCTURES_SEGMENTED_VECTOR_HPP
 

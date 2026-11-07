@@ -24,6 +24,11 @@
  * SOFTWARE.
  */
 
+/**
+ * @file aligned_table.hpp
+ * @brief prints labeled rows of values as a table with aligned columns
+ */
+
 #ifndef STRING_UTILS_MISC_ALIGNED_TABLE_HPP
 #define STRING_UTILS_MISC_ALIGNED_TABLE_HPP
 
