@@ -185,8 +185,9 @@ endfunction()
 #
 # applies each patch <project dir>/patches/<path below external/>.patch (written by patches/make-patch.sh
 # of string-utils) to its submodule; a patch that has already been applied is skipped; if an earlier version of the
-# patch (from the git history of the patch file) is applied, it is reverted first; a patch that cannot be applied is
-# skipped with a warning
+# patch (from the git history of the patch file) is applied, it is reverted first and a submodule behind its pinned
+# commit is then moved there (see string_utils_sync_submodules); a patch that cannot be applied is skipped with a
+# warning
 function(string_utils_apply_patches project_dir)
   file(GLOB_RECURSE patches RELATIVE "${project_dir}/patches" "${project_dir}/patches/*.patch")
 
@@ -235,6 +236,16 @@ function(string_utils_apply_patches project_dir)
           COMMAND "${GIT_EXECUTABLE}" apply --reverse "${earlier_patch_file}"
           WORKING_DIRECTORY "${submodule_dir}" OUTPUT_QUIET ERROR_QUIET)
         message(STATUS "Reverted the version of patches/${patch} of commit ${version} in external/${submodule}")
+
+        # without the changes of the earlier patch, a submodule behind its pinned commit can be moved there
+        execute_process(
+          COMMAND "${GIT_EXECUTABLE}" rev-parse --show-superproject-working-tree
+          WORKING_DIRECTORY "${submodule_dir}" OUTPUT_VARIABLE parent_dir OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+
+        if(NOT parent_dir STREQUAL "")
+          string_utils_sync_submodules_of("${parent_dir}")
+        endif()
+
         break()
       endif()
     endforeach()
