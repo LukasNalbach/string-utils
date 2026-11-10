@@ -78,10 +78,12 @@ endif()
 set(string_utils_debug_flags "-Wall -Wextra -Wpedantic ${string_utils_debug_info_flags}")
 set(string_utils_release_flags "-w ${string_utils_arch_flags} -DNDEBUG")
 
-set(CMAKE_CXX_FLAGS_DEBUG           "${string_utils_debug_flags} -O0")
-set(CMAKE_CXX_FLAGS_RELEASE         "${string_utils_release_flags} -O3")
-set(CMAKE_CXX_FLAGS_MINSIZEREL      "${string_utils_release_flags} -Os")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO  "${string_utils_debug_flags} -O3")
+foreach(lang C CXX)
+  set(CMAKE_${lang}_FLAGS_DEBUG           "${string_utils_debug_flags} -O0")
+  set(CMAKE_${lang}_FLAGS_RELEASE         "${string_utils_release_flags} -O3")
+  set(CMAKE_${lang}_FLAGS_MINSIZEREL      "${string_utils_release_flags} -Os")
+  set(CMAKE_${lang}_FLAGS_RELWITHDEBINFO  "${string_utils_debug_flags} -O3")
+endforeach()
 
 # stack size in bytes of the threads: the default of Linux (ulimit -s), where the default of Windows is 1 MiB (main
 # thread and threads) and that of macOS 512 KiB (threads) and 1 MiB (threads of LLVM's OpenMP runtime); the threads of
