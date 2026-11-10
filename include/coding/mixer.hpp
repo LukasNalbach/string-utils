@@ -48,7 +48,7 @@ inline constexpr uint32_t stretch_fraction_bits = 8;
 // number of bits of a quantized probability: the stretch table has an entry for each quantized probability
 inline constexpr uint32_t quantized_probability_bits = 12;
 
-// the largest absolute value of a stretched probability; the stretch values fill the 12-bit signed integers
+// the largest absolute value of a stretched probability, so that stretched probabilities are 12-bit signed integers
 inline constexpr int32_t stretch_limit = (int32_t(1) << (quantized_probability_bits - 1)) - 1;
 
 // a weight of the mixer is stored in units of 2^-weight_fraction_bits

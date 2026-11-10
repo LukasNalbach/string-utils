@@ -233,7 +233,7 @@ public:
  *        4. the low parts (split bits each);
  *        5. if high > 0: m bits, bit k set <=> value k starts a run of equal high parts;
  *        6. if high > 0: the high part of each run (high bits each).
- *        split minimizes the size of the block.
+ *        split is chosen such that the block size is minimal.
  */
 class lcp_block {
 private:
@@ -261,7 +261,7 @@ public:
         std::vector<uint64_t> differ(total + 1, 0);
         for (uint64_t k = 1; k < m; k++) differ[std::bit_width((values[k] - base) ^ (values[k - 1] - base))]++;
 
-        // the split with the fewest bits; the split total stores no high parts
+        // the split with the fewest bits; with the split total, no high parts are stored
         uint8_t split = total;
         uint64_t best = m * total;
         uint64_t runs = 1; // number of runs of equal high parts for the split in the loop

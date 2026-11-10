@@ -150,7 +150,7 @@ public:
     uint64_t varint() { return read_varint(*this); }
 
     /**
-     * @brief returns the next bytes; they stay valid until the next call
+     * @brief returns the next bytes, which are valid until the next call
      * @param size number of bytes
      */
     const uint8_t* bytes(uint64_t size)
@@ -192,7 +192,7 @@ public:
         }
     }
 
-    // appends the last byte, if it holds bits
+    // appends the last byte if buffer contains bits
     void finish()
     {
         if (num_bits > 0) out.push_back(uint8_t(buffer));

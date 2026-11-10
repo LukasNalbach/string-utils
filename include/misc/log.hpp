@@ -53,7 +53,7 @@
 
 #include <misc/platform.hpp>
 
-// the stream the log functions write to: std::cout, or std::cerr if std::cout carries the output of a tool
+// the stream the log functions write to: std::cout, or std::cerr if the output of a tool is written to std::cout
 inline std::ostream* log_stream = &std::cout;
 
 // prints the line of the items logged with log_grouped, if there are any (defined below)
@@ -394,10 +394,10 @@ inline void log_spilled_size(bool log, const std::string& file)
     if (!ec) log_out() << ": " << format_size(bytes) << std::flush;
 }
 
-// whether the line of the running phase currently shows a progress
+// whether a progress is currently printed in the line of the running phase
 inline bool phase_shows_progress = false;
 
-// maximum number of parts of a phase that report their progress separately (see begin_progress)
+// maximum number of parts of a phase whose progress is reported separately (see begin_progress)
 inline constexpr uint64_t max_progress_parts = 4;
 
 // progress of a finished phase; the progress is counted in per mille
@@ -411,7 +411,7 @@ inline std::array<uint64_t, max_progress_parts> progress_of_part = { 0, 0, 0, 0 
 inline uint64_t progress_parts = 1;
 // progress of the running phase in per mille that was printed last
 inline uint64_t progress_drawn = 0;
-// index of the part of the running phase the current thread reports the progress of
+// index of the part of the running phase whose progress the current thread reports
 inline thread_local uint64_t progress_part = 0;
 // time point at which the running phase started
 inline std::chrono::steady_clock::time_point progress_started;
@@ -423,7 +423,7 @@ inline constexpr uint64_t min_progress_ns = 1000000000;
 
 /**
  * @brief resets the progress of the running phase and sets the number of its parts
- * @param parts number of parts that report their progress separately (clamped to [1, max_progress_parts])
+ * @param parts number of parts whose progress is reported separately (clamped to [1, max_progress_parts])
  */
 inline void begin_progress(uint64_t parts);
 
@@ -527,7 +527,7 @@ public:
 
     /**
      * @brief counts grain() steps, if i is the last index of a block of grain() consecutive indices; to
-     *        be called with every index of a loop whose index counts the steps of the phase
+     *        be called with every index of a loop that runs over the steps of the phase
      * @param i loop index
      */
     void at(uint64_t i)
@@ -571,7 +571,7 @@ public:
  */
 class progress_streambuf : public std::streambuf {
     std::streambuf* target; // the stream buffer the bytes are passed through
-    phase_progress* progress; // counts the bytes
+    phase_progress* progress; // the progress in which the bytes are counted
     uint64_t pending = 0; // the number of bytes passed through and not yet counted
 
     // counts bytes bytes, once at least progress->grain() bytes have been passed through
@@ -615,7 +615,7 @@ protected:
 public:
     /**
      * @param stream the stream whose stream buffer the bytes are passed through
-     * @param progress counts the bytes
+     * @param progress the progress in which the bytes are counted
      */
     progress_streambuf(std::ios& stream, phase_progress& progress) : target(stream.rdbuf()), progress(&progress) {}
 
@@ -624,12 +624,12 @@ public:
 
 /** @brief an input stream that reads from another stream and counts the bytes read (see progress_streambuf) */
 class progress_istream : public std::istream {
-    progress_streambuf buf; // passes the bytes through
+    progress_streambuf buf; // the stream buffer through which the bytes are passed
 
 public:
     /**
      * @param in the stream to read from
-     * @param progress counts the bytes read
+     * @param progress the progress in which the read bytes are counted
      */
     progress_istream(std::istream& in, phase_progress& progress) : std::istream(nullptr), buf(in, progress)
     {
@@ -639,12 +639,12 @@ public:
 
 /** @brief an output stream that writes to another stream and counts the bytes written (see progress_streambuf) */
 class progress_ostream : public std::ostream {
-    progress_streambuf buf; // passes the bytes through
+    progress_streambuf buf; // the stream buffer through which the bytes are passed
 
 public:
     /**
      * @param out the stream to write to
-     * @param progress counts the bytes written
+     * @param progress the progress in which the written bytes are counted
      */
     progress_ostream(std::ostream& out, phase_progress& progress) : std::ostream(nullptr), buf(out, progress)
     {
@@ -682,11 +682,11 @@ inline void flush_log_group();
 
 /**
  * @brief logs an item of an action, e.g. storing a data structure, in one line with the items of the same action
- *        logged directly before it: "<action> <item>, <item>, ...[: <total size>], in ~ <total time>"; the line is
- *        printed before the next other output of the log functions (see log_out); a qualifier in parentheses at the
+ *        logged directly before it: "<action> <item>, <item>, ...[: <total size>], in ~ <total time>". The line is
+ *        printed before the next other output of the log functions (see log_out). A qualifier in parentheses at the
  *        end of an item is printed once for consecutive items with it, consecutive items of the same name are
  *        printed once with their qualifiers, an item equal to the previous one is printed once, and an item with
- *        another qualifier starts a new line
+ *        another qualifier is printed in a new line.
  * @param log whether logging is enabled
  * @param action the action, e.g. "storing"
  * @param item the item, e.g. "the samples (forward)"

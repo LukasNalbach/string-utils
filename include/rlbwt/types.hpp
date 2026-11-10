@@ -54,7 +54,7 @@ inline constexpr uint64_t min_symbol = 2;
 inline constexpr uint64_t terminator = 0;
 
 /* largest width (in bits) of a bit-packed value of the output: a value is read with one unaligned 64-bit load, which
-   also holds the bits of the byte before it (see read_bits) */
+   also contains the bits of the byte before it (see read_bits) */
 inline constexpr uint8_t max_packed_bits =
     std::numeric_limits<uint64_t>::digits - (std::numeric_limits<uint8_t>::digits - 1);
 
@@ -118,8 +118,9 @@ enum class file_format : uint8_t {
 };
 
 /* the sections of the runs file (see ext_runs); a caller adds further sections with identifiers from
-   first_extra_section on (see output_params::extra_sections). Which sections a file stores tells its format. Values
-   are stored little endian; bit-packed data stores the bits of a byte least significant bit first. */
+   first_extra_section on (see output_params::extra_sections). The format of a file follows from the sections it
+   contains. Values are stored little endian; in bit-packed data, the bits of a byte are stored least significant bit
+   first. */
 enum run_data_section : uint64_t {
     section_fields, // the numbers that describe the file (see run_data_fields)
     /* plain: [0..r-1] the record of run i at offset i * record_bytes: the BWT position of its start and its symbol and,

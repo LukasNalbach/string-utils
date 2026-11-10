@@ -51,7 +51,7 @@ inline void print_compressor_help(std::ostream& out, const compressor_spec& spec
 
     if (spec.fasta) {
         h.option_fasta("store the header lines and the line layout of FASTA files separately from the sequences; "
-            "-d reads the mode from <input_file>");
+            "with -d, the mode is read from <input_file>");
     }
 
     print_options(h, compressor_help_part::tool);
@@ -80,8 +80,9 @@ inline void print_compressor_help(std::ostream& out, const compressor_spec& spec
         h.option("-pc <postcompressor>", names + " (default: " + std::string(spec.default_postcompressor) + ")",
             "postcompressor (it has to be on the PATH); none: no post-compression");
         h.option("-<quality>", "integer in a range and with a default per postcompressor: " + qualities,
-            "post-compression quality, e.g. -9: higher gives smaller output but takes longer; for bsc and bzip3 the "
-            "block size in MB (bsc default: the largest block that needs no more memory than the construction)");
+            "post-compression quality, e.g. -9 (the higher the quality, the smaller the output and the longer the "
+            "post-compression); for bsc and bzip3 the block size in MB (bsc default: the largest block size with which "
+            "bsc uses no more memory than the construction)");
     }
 
     h.group("execution");

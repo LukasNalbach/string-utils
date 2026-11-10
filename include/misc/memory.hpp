@@ -110,8 +110,8 @@ struct no_init_allocator {
 template <typename T>
 using no_init_vector = std::vector<T, no_init_allocator<T>>;
 
-// random access iterator over copies of default_init_t; inserting such a range into a no_init_vector default-initializes
-// the new elements
+// random access iterator over copies of default_init_t; if such a range is inserted into a no_init_vector, the new
+// elements are default-initialized
 class default_init_iterator {
     int64_t _pos = 0;
 

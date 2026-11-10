@@ -164,7 +164,7 @@ public:
 
 // ############################# O_DIRECT #############################
 
-// alignment in bytes that O_DIRECT requires of each buffer address, file offset and length (a sector)
+// alignment in bytes of each buffer address, file offset and length with O_DIRECT (a sector)
 using platform::direct_io_alignment;
 
 /**
@@ -322,7 +322,7 @@ protected:
 
     int sync() override { return flush_buffer() ? 0 : -1; }
 
-    // writes n bytes; without O_DIRECT, a write of at least buffer_length bytes bypasses the buffer
+    // writes n bytes; without O_DIRECT, at least buffer_length bytes are written without the buffer
     std::streamsize xsputn(const char* s, std::streamsize n) override;
 
 public:
@@ -413,7 +413,7 @@ protected:
     // fills the buffer from the file; returns the first character read, or eof at the end of the file
     int_type underflow() override;
 
-    // reads n bytes; without O_DIRECT, a read of at least capacity bytes bypasses the buffer
+    // reads n bytes; without O_DIRECT, at least capacity bytes are read without the buffer
     std::streamsize xsgetn(char* s, std::streamsize n) override;
 
     // sets the read position to pos; returns the new read position, or -1 if seeking failed
@@ -522,7 +522,7 @@ inline constexpr auto ignore_block = [](const char*, uint64_t, uint64_t) {};
  *        see place_pages_on_threads), or nullptr to read each block into the same temporary buffer of block_size bytes
  * @param process function called as process(data, length, offset) for each block
  * @param block_size size of a block in bytes
- * @param prog counts the bytes read (see phase_progress)
+ * @param prog the read bytes are counted in it (see phase_progress)
  * @return whether all size bytes were read
  */
 template <typename fnc_t = decltype(ignore_block)>
@@ -649,19 +649,19 @@ public:
 
 /**
  * @brief reads a file in consecutive windows (as fasta_window loads them: a window starts at the last byte of the
- *        window before it, with the byte before that) through two direct_readers: reading a window starts reading the
- *        window after it with the other reader in a background thread (std::async)
+ *        window before it, with the byte before that) through two direct_readers: when a window is read, the window
+ *        after it is read with the other reader in a background thread (std::async)
  */
 class read_ahead_reader {
 public:
-    // number of bytes a window has at most (see fasta_window)
+    // maximum number of bytes of a window (see fasta_window)
     static constexpr uint64_t block = direct_reader::block;
 
 private:
     std::array<direct_reader, 2> readers; // the reader of the current window and the one that reads ahead
     uint64_t current = 0; // the index of the reader of the current window
-    std::future<void> ahead; // reads the next window into readers[1 - current] (if valid)
-    uint64_t ahead_beg = 0, ahead_end = 0; // the bytes [ahead_beg, ahead_end) that ahead reads
+    std::future<void> ahead; // the read of the next window into readers[1 - current] (if valid)
+    uint64_t ahead_beg = 0, ahead_end = 0; // the bytes [ahead_beg, ahead_end) read by ahead
 
     // waits for the read ahead and switches to its reader if its bytes contain [beg, end)
     void finish_ahead(uint64_t beg, uint64_t end)
@@ -676,7 +676,7 @@ public:
     explicit read_ahead_reader(const std::string& path) : readers { direct_reader(path), direct_reader(path) } { }
     read_ahead_reader(read_ahead_reader&& other) noexcept { *this = std::move(other); }
 
-    // the window that other reads ahead is read again
+    // the window that other reads ahead is discarded and read again when it is requested
     read_ahead_reader& operator=(read_ahead_reader&& other) noexcept
     {
         if (ahead.valid()) ahead.wait();
@@ -709,8 +709,8 @@ public:
 /**
  * @brief reads ranges of a file in blocks of at most block_bytes bytes, with O_DIRECT or, if the file system does not
  *        support O_DIRECT, through the page cache (then the read pages are dropped from it every drop_interval bytes).
- *        The buffer is allocated with platform::allocate_aligned_counted, which malloc_count counts. Several threads
- *        need one reader each.
+ *        The buffer is allocated with platform::allocate_aligned_counted, so that malloc_count counts it. Several
+ *        threads need one reader each.
  */
 class direct_range_reader {
 public:
@@ -798,8 +798,8 @@ public:
 /**
  * @brief a file of a known length that several threads write at disjoint ranges, in any order, with O_DIRECT (if the
  *        file system does not support O_DIRECT, through the page cache, whose pages of the file are dropped when it is
- *        closed). The whole sectors of a write are written directly; the bytes of a sector that a write covers only
- *        partly are collected in memory until the sector is complete, and then written once. close_file writes the
+ *        closed). The whole sectors of a write are written directly; the bytes of a sector that is written only partly
+ *        by a write are collected in memory until the sector is complete, and then written once. close_file writes the
  *        sectors that are still incomplete padded with zeros and truncates the file to its length. Every byte of the
  *        file is written at most once.
  */
@@ -807,7 +807,7 @@ class direct_positioned_file {
 public:
     // alignment in bytes of buffer addresses, file offsets and lengths with O_DIRECT
     static constexpr uint64_t sector = direct_io_alignment;
-    // size in bytes of the aligned buffer that write copies the sectors of unaligned data through
+    // size in bytes of the aligned buffer through which write copies the sectors of unaligned data
     static constexpr uint64_t copy_buffer_bytes = 1024 * 1024;
 
 private:
@@ -858,9 +858,9 @@ public:
     uint64_t size() const { return length; }
 
     /**
-     * @brief writes bytes at an offset of the file; can be called by several threads at once. The sectors the write
-     *        covers completely are written without copying if data + (sector - offset % sector) % sector is aligned to
-     *        sector (e.g., if data is aligned to sector and offset is a multiple of sector). Throws
+     * @brief writes bytes at an offset of the file; can be called by several threads at once. The sectors that are
+     *        written completely are written without copying if data + (sector - offset % sector) % sector is aligned
+     *        to sector (e.g., if data is aligned to sector and offset is a multiple of sector). Throws
      *        std::runtime_error if the write fails and std::invalid_argument if it ends after the file.
      * @param data the bytes
      * @param size the number of bytes
@@ -892,13 +892,13 @@ public:
 /**
  * @brief a file that several threads write to at given offsets, in any order, with O_DIRECT (if the file system does
  *        not support it, through the page cache). The sectors of a write are written directly; the bytes of a sector
- *        that the write covers only partly are collected until the sector is complete. close writes the remaining
- *        sectors padded with zeros and truncates the file to its length.
+ *        that is written only partly by the write are collected until the sector is complete. close writes the
+ *        remaining sectors padded with zeros and truncates the file to its length.
  */
 class parallel_output_file : public positioned_output {
 private:
     static constexpr uint64_t sector = direct_io_alignment;
-    // size in bytes of the aligned buffer of each thread that write copies the complete sectors through
+    // size in bytes of the aligned buffer of each thread through which write copies the complete sectors
     static constexpr uint64_t copy_buffer_bytes = 1024 * 1024;
 
     // a sector that has been written only partly
@@ -1023,7 +1023,8 @@ public:
         return data + (i - beg) * width;
     }
 
-    // returns value i (width <= 8; loads 8 bytes, which the buffer has after each value, and masks them)
+    // returns value i (width <= 8; loads 8 bytes, which the buffer contains from the start of each value on, and masks
+    // them)
     inline uint64_t operator[](uint64_t i)
     {
         uint64_t val;

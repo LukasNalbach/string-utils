@@ -130,7 +130,7 @@ namespace rlbwt {
 template <typename sym_t>
 class file_reader : public text_source<sym_t>::reader {
 private:
-    array_file_reader file; // reads the file
+    array_file_reader file; // the reader of the file
     uint64_t n; // n, the number of symbols in the file
     bool reverse; // true <=> the text is the reversed file
     const std::array<uint8_t, 256>* map; // the map of the bytes of the file_source (nullptr: not mapped)

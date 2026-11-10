@@ -57,8 +57,8 @@
 
 namespace {
 
-// largest number of bytes one ReadFile or WriteFile transfers: the largest power of two a DWORD holds (a multiple
-// of every sector size)
+// largest number of bytes one ReadFile or WriteFile transfers: the largest power of two that fits into a DWORD (a
+// multiple of every sector size)
 constexpr uint64_t max_transfer_bytes = std::bit_floor(uint64_t(std::numeric_limits<DWORD>::max()));
 
 // number of bits of a DWORD, the low part of a 64-bit offset in an OVERLAPPED
@@ -475,7 +475,7 @@ void platform::init()
     }
 
 #if defined(STRING_UTILS_STACK_BYTES) && defined(KMP_VERSION_MAJOR)
-    // the threads of LLVM's OpenMP runtime (libgomp gets the stack size of the executable)
+    // the threads of LLVM's OpenMP runtime (the threads of libgomp have the stack size of the executable)
     kmp_set_stacksize_s(size_t(STRING_UTILS_STACK_BYTES));
 #endif
 

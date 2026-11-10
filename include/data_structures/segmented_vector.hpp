@@ -82,11 +82,11 @@ enum vector_writers_t : uint8_t {
  * @brief vector stored in blocks of 2^log_block_length elements; the blocks are allocated on demand and never
  *        moved, i.e., references to elements stay valid when the vector grows
  *
- * With _many_writers, the table of block pointers has one entry per block of the largest size the vector may reach
- * (given to the constructor or to set_max_size; 0 until then) and is allocated together with the first block (zero-filled by calloc, so
- * only its pages that are written occupy memory); a thread that accesses an unallocated block allocates it under a
- * lock. An index of max_size() or more throws std::length_error. With _one_writer, the table grows with the number
- * of blocks.
+ * With _many_writers, the table of block pointers has one entry per block of a vector of the maximum size (given to
+ * the constructor or to set_max_size; 0 until then). It is allocated together with the first block and zero-filled
+ * by calloc, so that only its written pages occupy memory. A thread that accesses an unallocated block allocates it
+ * under a lock. Accessing an index of max_size() or more throws std::length_error. With _one_writer, the table grows
+ * with the number of blocks.
  *
  * @tparam val_t element type; must be trivially default constructible (the blocks are allocated uninitialized)
  * @tparam writers number of threads that write the vector (see vector_writers_t)
@@ -257,7 +257,7 @@ public:
 
     /**
      * @brief constructs an empty vector
-     * @param max_size largest number of elements the vector may reach (only with _many_writers; see set_max_size)
+     * @param max_size maximum number of elements of the vector (only with _many_writers; see set_max_size)
      */
     explicit segmented_vector(uint64_t max_size) { set_max_size(max_size); }
 
@@ -282,7 +282,7 @@ public:
     // returns whether the vector is empty
     inline bool empty() const { return _size == 0; }
 
-    // returns the largest number of elements the vector may reach (unbounded with _one_writer)
+    // returns the maximum number of elements of the vector (unbounded with _one_writer)
     inline uint64_t max_size() const
     {
         if constexpr (has_many_writers) return max_blocks * block_length;
@@ -290,7 +290,7 @@ public:
     }
 
     /**
-     * @brief sets the largest number of elements the vector may reach (only with _many_writers; with _one_writer
+     * @brief sets the maximum number of elements of the vector (only with _many_writers; with _one_writer
      *        the vector is unbounded); must not be called while other threads access the vector
      * @param max_size largest number of elements; at least the number of elements in allocated blocks
      */
@@ -330,7 +330,7 @@ public:
             if (num_blocks_in_table() <= block || block_ptr(block) == nullptr) allocate(block);
     }
 
-    // deallocates all blocks and the table and sets the size to 0 (the maximum size stays)
+    // deallocates all blocks and the table and sets the size to 0 (the maximum size is not changed)
     void clear()
     {
         delete_blocks(0, num_blocks_in_table());
@@ -435,7 +435,7 @@ public:
         for (uint64_t i = 0; i < count; i++) push_back(values[i]);
     }
 
-    // removes the last element (its block stays allocated)
+    // removes the last element (its block is not deallocated)
     inline void pop_back() { _size--; }
 };
 

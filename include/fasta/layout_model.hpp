@@ -46,12 +46,13 @@ using fasta_line_runs = std::vector<std::pair<uint64_t, uint64_t>>;
 /**
  * @brief codes the line layout of the records of a FASTA file. The sequence lines of a record with sequence length
  *        L are regular with a width W >= 1 if there are ceil(L / W) of them and all except the last one have length
- *        W; empty lines at the end of a record are counted separately. Per record: whether its lines are regular
- *        (context: the decision of the previous record); if they are, whether L is the L of the previous record with
- *        regular lines (context: the decision of that record), else L, and if L > 0, whether W is the width of the
- *        previous record (context: the decision of the previous record), else W - 1; if they are not, the number of
- *        runs of equal line lengths minus one and each run (length, number of lines minus one); then the number of
- *        empty lines at the end (context: whether the previous record ended with empty lines).
+ *        W; empty lines at the end of a record are counted separately. For each record, it is coded whether its lines
+ *        are regular (context: the decision of the previous record). If they are, the model codes whether L is the L
+ *        of the previous record with regular lines (context: the decision of that record), else L, and, if L > 0,
+ *        whether W is the width of the previous record (context: the decision of the previous record), else W - 1. If
+ *        they are not, it codes the number of runs of equal line lengths minus one and each run (length, number of
+ *        lines minus one). Then it codes the number of empty lines at the end (context: whether the previous record
+ *        ended with empty lines).
  */
 class fasta_layout_model {
 private:

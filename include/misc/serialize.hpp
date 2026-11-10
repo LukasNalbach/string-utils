@@ -46,12 +46,12 @@
 // ############################# CHUNKED STREAM I/O #############################
 
 /**
- * @brief reads size bytes from the input stream into data, in chunks that fit into a 32-bit signed integer; the pages
- *        of data are first placed on the NUMA nodes of the threads (see place_pages_on_threads)
+ * @brief reads size bytes from the input stream into data, in chunks whose sizes fit into a 32-bit signed integer; the
+ *        pages of data are first placed on the NUMA nodes of the threads (see place_pages_on_threads)
  * @param in the input stream
- * @param data the destination buffer (must hold at least size bytes)
+ * @param data the destination buffer of at least size bytes
  * @param size the number of bytes to read
- * @param prog counts the bytes read (see phase_progress); if given, the chunks have a size of 16 MiB
+ * @param prog the read bytes are counted in it (see phase_progress); if given, the chunks have a size of 16 MiB
  */
 inline void read_in_chunks(std::istream& in, char* data, uint64_t size,
     phase_progress* prog = nullptr)
@@ -70,11 +70,11 @@ inline void read_in_chunks(std::istream& in, char* data, uint64_t size,
 }
 
 /**
- * @brief writes size bytes from data to the output stream, in chunks that fit into a 32-bit signed integer
+ * @brief writes size bytes from data to the output stream, in chunks whose sizes fit into a 32-bit signed integer
  * @param out the output stream
- * @param data the source buffer (must hold at least size bytes)
+ * @param data the source buffer of at least size bytes
  * @param size the number of bytes to write
- * @param prog counts the bytes written (see phase_progress); if given, the chunks have a size of 16 MiB
+ * @param prog the written bytes are counted in it (see phase_progress); if given, the chunks have a size of 16 MiB
  */
 inline void write_in_chunks(std::ostream& out, const char* data, uint64_t size,
     phase_progress* prog = nullptr)

@@ -26,7 +26,8 @@
 
 /**
  * @file portable_layout.hpp
- * @brief bit-fields at the positions GCC and clang give them, for file formats that are the same on all platforms
+ * @brief bit-fields at the positions at which GCC and clang place them, for file formats that are the same on all
+ *        platforms
  */
 
 #ifndef STRING_UTILS_MISC_PORTABLE_LAYOUT_HPP
@@ -39,8 +40,8 @@
 
 #include <misc/bits.hpp>
 
-/* [[no_unique_address]] on every ABI: the Microsoft C++ ABI (MSVC, and clang targeting *-windows-msvc) ignores
-   [[no_unique_address]] and only knows [[msvc::no_unique_address]] */
+/* [[no_unique_address]] on every ABI: with the Microsoft C++ ABI (MSVC, and clang targeting *-windows-msvc),
+   [[no_unique_address]] is ignored and only [[msvc::no_unique_address]] is supported */
 #if defined(_MSC_VER)
 #define STRING_UTILS_NO_UNIQUE_ADDRESS [[msvc::no_unique_address]]
 #else
@@ -72,15 +73,16 @@ inline constexpr uint64_t end_of_bit_field<void> = 0;
 template <typename prev_field, uint64_t width>
 using next_bit_field_t = bit_field_t<end_of_bit_field<prev_field>, width>;
 
-// number of bytes the bit-fields up to last_field (inclusive) take
+// number of bytes occupied by the bit-fields up to last_field (inclusive)
 template <typename last_field>
 inline constexpr uint64_t bytes_of_bit_fields = div_ceil<uint64_t>(last_field::end, 8);
 
 /**
- * @brief bit-fields in num_bytes bytes at the positions GCC and clang give the bit-fields of a packed struct on a
- *        little-endian Itanium-ABI target (e.g. x86-64 Linux): each field starts at the bit after the previous one,
- *        the first one at bit 0 of byte 0. The Microsoft ABI does not let a bit-field cross a storage unit of its type,
- *        so a struct whose bytes have to be the same on every ABI stores its bit-fields here (see bit_field_t).
+ * @brief bit-fields in num_bytes bytes at the positions at which GCC and clang place the bit-fields of a packed struct
+ *        on a little-endian Itanium-ABI target (e.g. x86-64 Linux): each field starts at the bit after the previous
+ *        one, the first one at bit 0 of byte 0. With the Microsoft ABI, a bit-field cannot cross a storage unit of its
+ *        type, so the bit-fields of a struct whose bytes have to be the same on every ABI are stored here (see
+ *        bit_field_t).
  * @tparam num_bytes number of bytes
  */
 template <uint64_t num_bytes>
@@ -95,8 +97,8 @@ protected:
     template <typename field>
     static constexpr uint64_t span_bytes = div_ceil<uint64_t>(field::pos % 8 + field::width, 8);
 
-    // number of bytes read and written to access field: the smallest of 1, 2, 4 and 8 bytes that holds it, or all
-    // bytes if there are fewer
+    // number of bytes read and written to access field: the smallest of 1, 2, 4 and 8 bytes that contains the field,
+    // or all bytes if there are fewer
     template <typename field>
     static constexpr uint64_t window_bytes = std::min<uint64_t>(num_bytes, std::bit_ceil(span_bytes<field>));
 
@@ -152,7 +154,7 @@ protected:
     template <typename field>
     using value_of_t = uint64_t;
 
-    // number of 64-bit words assign composes the bytes in
+    // number of 64-bit words in which assign composes the bytes
     static constexpr uint64_t num_words = div_ceil<uint64_t>(num_bytes, sizeof(uint64_t));
 
     // adds the lowest field::width bits of value at the position of field to the little-endian words

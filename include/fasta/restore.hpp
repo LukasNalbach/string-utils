@@ -141,8 +141,8 @@ private:
     fasta_output& out; // the output
     uint8_t flags; // the flags
     uint64_t num_records; // the number of records
-    range_decoder headers; // decodes the headers
-    range_decoder layout; // decodes the line layout
+    range_decoder headers; // the decoder of the headers
+    range_decoder layout; // the decoder of the line layout
     fasta_header_model header_coder; // the model of the headers
     fasta_layout_model layout_coder; // the model of the line layout
     std::string line_end; // the line end

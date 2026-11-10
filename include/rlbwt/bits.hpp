@@ -45,10 +45,12 @@ namespace rlbwt {
 // number of bits of a byte
 inline constexpr uint8_t byte_bits = std::numeric_limits<uint8_t>::digits;
 
-// number of bytes a buffer of bit-packed data has after its last byte, so that read_bits can load 8 bytes anywhere
+// number of readable bytes after the last byte of a buffer of bit-packed data, so that read_bits can load 8 bytes at
+// any offset
 inline constexpr uint64_t read_padding = sizeof(uint64_t);
 
-// bits per width (of a value or of a part of a block) stored in a block: they hold max_packed_bits
+// number of bits of a width (of a value or of a part of a block) stored in a block, so that max_packed_bits fits into
+// them
 inline constexpr uint8_t width_bits = std::bit_width(max_packed_bits);
 
 // returns 2^bits - 1 (bits <= 64)

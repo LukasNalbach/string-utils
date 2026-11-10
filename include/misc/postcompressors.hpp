@@ -26,8 +26,8 @@
 
 /**
  * @file postcompressors.hpp
- * @brief general-purpose compressors (external programs) that a compressor (see compressor_cli.hpp) compresses its
- *        output file with (option -pc) and decompresses it with
+ * @brief general-purpose compressors (external programs) with which a compressor (see compressor_cli.hpp) compresses
+ *        its output file (option -pc) and decompresses it
  */
 
 #ifndef STRING_UTILS_MISC_POSTCOMPRESSORS_HPP
@@ -280,8 +280,9 @@ inline postcompressor_command compress_command(const postcompressor_spec& spec, 
         case sevenzip: return { "7z a -t7z -mx=" + q + " -mmt=" + p + " -bso0 -bsp2 " + out + " " + in,
             progress_source::tool_stderr, output_target::file_argument };
         // -e2: adaptive coder, -t: the blocks are compressed one after another (each with all threads),
-        // -p: without the LZP stage; bsc takes the number of threads from OpenMP; bsc reads its input file itself (it
-        // seeks in it) and prints its progress to its standard output, so the archive is written to descriptor 3
+        // -p: without the LZP stage. The number of threads of bsc is set through OpenMP (OMP_NUM_THREADS). bsc reads its
+        // input file itself (it seeks in it) and prints its progress to its standard output, so the archive is written
+        // to descriptor 3.
         case bsc:
 #ifdef _WIN32
             return { "bsc e " + in + " " + out + " -b" + q + " -e2tp", progress_source::tool_stdout,
@@ -412,8 +413,8 @@ public:
 
 #ifndef _WIN32
 /**
- * @brief creates a pipe whose descriptors are at least 10 (so they differ from the descriptors 0 to 3 a spawned
- *        program gets) and are closed in a spawned program
+ * @brief creates a pipe whose descriptors are at least 10 (so that they differ from the descriptors 0 to 3 of a spawned
+ *        program) and are closed in a spawned program
  * @param fds is set to the read end and the write end
  * @return whether the pipe was created
  */
@@ -565,7 +566,7 @@ inline bool run_postcompressor(const postcompressor_command& command, const std:
     posix_spawn_file_actions_init(&actions);
     posix_spawnattr_init(&attributes);
 
-    // the program gets the default action of SIGPIPE, which this process ignores while it runs
+    // SIGPIPE has its default action in the program; this process ignores SIGPIPE while the program runs
     sigset_t default_signals;
     sigemptyset(&default_signals);
     sigaddset(&default_signals, SIGPIPE);

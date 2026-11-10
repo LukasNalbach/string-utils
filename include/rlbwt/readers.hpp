@@ -69,13 +69,14 @@ struct run_head {
 /**
  * @brief reads ranges of a file with O_DIRECT (if the file system does not support it, through the page cache, whose
  *        pages are dropped): read() reads exactly the sectors of a range with one pread; read_ahead() returns the range
- *        from the buffer if it holds it, and otherwise reads at least stream_bytes bytes from the range on with one
- *        pread. A returned range is followed by at least read_padding readable bytes.
+ *        from the buffer if the buffer contains it, and otherwise reads at least stream_bytes bytes from the range on
+ *        with one pread. A returned range is followed by at least read_padding readable bytes.
  */
 class direct_block_reader {
 public:
     static constexpr uint64_t sector = direct_io_alignment;
-    static constexpr uint64_t stream_bytes = direct_reader::block; // bytes read_ahead reads at once (at least)
+    // minimum number of bytes that read_ahead reads at once
+    static constexpr uint64_t stream_bytes = direct_reader::block;
 
 private:
     std::string path; // path of the file
@@ -246,7 +247,7 @@ public:
      * @param file the runs file (it must stay valid)
      * @param first the first run
      * @param end the run after the last one (default: r)
-     * @param read_sa whether the SA values are read (compressed format; the plain format reads all values)
+     * @param read_sa whether the SA values are read (compressed format; in the plain format, all values are read)
      * @param read_lcp whether the LCP values are read (compressed format)
      */
     explicit run_stream(const run_data_file& file, uint64_t first = 0,
@@ -272,8 +273,8 @@ public:
 };
 
 /**
- * @brief random access to the runs of a file in the plain format on the disk; each access reads the file once (with
- *        O_DIRECT): run, length, record, run_of and each sample read one range of the file. One reader per thread.
+ * @brief random access to the runs of a file in the plain format on the disk: run, length, record, run_of and each
+ *        sample read one range of the file (with O_DIRECT). One reader per thread.
  */
 class plain_disk_reader {
 private:
@@ -444,7 +445,7 @@ public:
     uint64_t num_reads() const { return source.num_reads(); }
 };
 
-// a source of compressed_access that holds the sections in RAM
+// a source of compressed_access that stores the sections in RAM
 class compressed_memory_source {
 private:
     run_data_file f; // a copy of the runs file
@@ -469,7 +470,7 @@ public:
 };
 
 /**
- * @brief the runs of a file in the compressed format, held in RAM in this format
+ * @brief the runs of a file in the compressed format, stored in RAM in this format
  */
 class compressed_ram_reader : public compressed_access<compressed_memory_source> {
 public:
@@ -487,7 +488,7 @@ public:
 };
 
 /**
- * @brief the runs of a file in either format, held in RAM bit-packed: per run its start, its
+ * @brief the runs of a file in either format, stored in RAM bit-packed: per run its start, its
  *        symbol and the values the file stores, interleaved, each with a fixed number of bits
  */
 class packed_ram_reader {

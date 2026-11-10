@@ -72,24 +72,25 @@ inline constexpr uint64_t fasta_min_chunk_bytes = uint64_t(16) << 20;
 
 /**
  * @brief maps the bytes of a FASTA file to the symbols of a text, one byte at a time (see step):
- *   - a line feed yields nothing
- *   - a carriage return yields nothing, or nothing only if a line feed follows it, or is a body byte (see
+ *   - a line feed is mapped to nothing
+ *   - a carriage return is mapped to nothing, or to nothing only if a line feed follows it, or is a body byte (see
  *     carriage_return)
- *   - a header line (from '>' to the end of the line) yields one separator; if separator_before_first_record is
- *     false, the header of the first record yields nothing
- *   - a body byte that is in the alphabet (after upper-casing, if to_upper) yields itself
- *   - a run of body bytes that are not in the alphabet (a masked run) yields one separator
- *   - the lines before the first header yield nothing, or form the first record if lines_before_first_header
+ *   - a header line (from '>' to the end of the line) is mapped to one separator; if separator_before_first_record
+ *     is false, the header of the first record is mapped to nothing
+ *   - a body byte that is in the alphabet (after upper-casing, if to_upper) is mapped to itself
+ *   - a run of body bytes that are not in the alphabet (a masked run) is mapped to one separator
+ *   - the lines before the first header are mapped to nothing, or form the first record if
+ *     lines_before_first_header
  */
 struct fasta_transform {
     // result of processing one input byte
     enum step_t : uint8_t {
-        _nothing,  // the byte yields no symbol
-        _symbol,   // the byte yields itself (upper-cased, if to_upper)
-        _separator // the byte yields the separator (a header or the first byte of a masked run)
+        _nothing,  // the byte is mapped to no symbol
+        _symbol,   // the byte is mapped to itself (upper-cased, if to_upper)
+        _separator // the byte is mapped to the separator (a header or the first byte of a masked run)
     };
 
-    // what a carriage return yields
+    // what a carriage return is mapped to
     enum carriage_return_t : uint8_t {
         _dropped,                  // nothing
         _dropped_before_line_feed, // nothing if a line feed follows it, else it is a body byte
@@ -117,19 +118,19 @@ struct fasta_transform {
 
     // [0..255] in_alphabet[c] = 1 <=> the byte c is in the alphabet (c is upper-cased first if to_upper)
     std::array<uint8_t, 256> in_alphabet {};
-    uint8_t separator = 0; // the byte a header line and a masked run each yield
+    uint8_t separator = 0; // the symbol to which each header line and each masked run is mapped
     bool to_upper = true; // whether body bytes are upper-cased
-    bool separator_before_first_record = true; // whether the header of the first record yields a separator
+    bool separator_before_first_record = true; // whether the header of the first record is mapped to a separator
     bool lines_before_first_header = false; // whether the lines before the first header form a record
-    carriage_return_t carriage_return = _dropped; // what a carriage return yields
+    carriage_return_t carriage_return = _dropped; // what a carriage return is mapped to
 
     fasta_transform() = default;
 
     /**
-     * @brief builds the transformation that keeps the bytes of an alphabet, yields a separator for each header and
-     *        each masked run, skips the lines before the first header and drops every carriage return
+     * @brief builds the transformation that keeps the bytes of an alphabet, maps each header and each masked run to a
+     *        separator, skips the lines before the first header and drops every carriage return
      * @param alphabet the bytes that are kept verbatim
-     * @param separator the byte a header line and a masked run each yield
+     * @param separator the symbol to which each header line and each masked run is mapped
      * @param to_upper whether body bytes are upper-cased before they are looked up in the alphabet
      */
     fasta_transform(const std::string& alphabet, uint8_t separator = fasta_default_separator, bool to_upper = true)
@@ -142,10 +143,10 @@ struct fasta_transform {
      * @brief processes one input byte
      * @param c the input byte
      * @param st the state (updated)
-     * @param out (output) the yielded symbol; only set if the result is _symbol
+     * @param out (output) the symbol to which c is mapped; only set if the result is _symbol
      * @param line_feed_follows returns whether the byte after c is a line feed (only called for a carriage return
      *        with _dropped_before_line_feed)
-     * @return what the byte yields
+     * @return what the byte is mapped to
      */
     template <typename line_feed_follows_t>
     inline step_t step(uint8_t c, state_t& st, uint8_t& out, line_feed_follows_t line_feed_follows) const;
@@ -154,12 +155,12 @@ struct fasta_transform {
      * @brief processes a body byte of a record (see step), that is neither a line feed nor a dropped carriage return
      * @param c the input byte
      * @param st the state (updated)
-     * @param out (output) the yielded symbol; only set if the result is _symbol
-     * @return what the byte yields
+     * @param out (output) the symbol to which c is mapped; only set if the result is _symbol
+     * @return what the byte is mapped to
      */
     inline step_t body_step(uint8_t c, state_t& st, uint8_t& out) const;
 
-    // returns the byte that a body byte is looked up as in the alphabet (upper-cased, if to_upper)
+    // returns the byte that is looked up in the alphabet for a body byte (upper-cased, if to_upper)
     inline uint8_t lookup_byte(uint8_t c) const
     {
         return (to_upper && c >= 'a' && c <= 'z') ? uint8_t(c - 'a' + 'A') : c;
@@ -168,7 +169,7 @@ struct fasta_transform {
     // returns whether a body byte is masked (not in the alphabet, see body_step)
     inline bool masked(uint8_t c) const { return in_alphabet[lookup_byte(c)] == 0; }
 
-    // returns whether every body byte yields itself (see body_step)
+    // returns whether every body byte is mapped to itself (see body_step)
     bool keeps_body_bytes() const
     {
         return !to_upper && std::all_of(in_alphabet.begin(), in_alphabet.end(), [](uint8_t in) { return in != 0; });
@@ -176,7 +177,7 @@ struct fasta_transform {
 
     /**
      * @brief returns the end of the run of bytes of the current line that starts at i: the first line feed in
-     *        bytes[i..lim-1], or the first carriage return that yields nothing, or lim if there is none
+     *        bytes[i..lim-1], or the first carriage return that is mapped to nothing, or lim if there is none
      * @param bytes [0..n-1] bytes of the file
      * @param i the start of the run
      * @param lim the end of the bytes to search
@@ -190,11 +191,11 @@ struct fasta_transform {
      * @tparam handler_t type of the handler, with the methods
      *   - full(): returns whether the walk stops
      *   - body(bytes, len, i, st): processes body bytes (see body_step) bytes[0..len-1] = the bytes [i..i+len-1],
-     *     updates st and returns how many of them it has processed (fewer than len stops the walk)
+     *     updates st and returns how many of them it has processed (if fewer than len, the walk stops)
      *   - header(bytes, len): processes bytes of a header line after its '>', without its line end
      *   - step(i, c, before, after, step, symbol, after_cr): processes the byte c = bytes[i] with the states before
-     *     and after it; step is what it yields, symbol the yielded symbol (the separator if step is _separator) and
-     *     after_cr whether the byte before it is a carriage return
+     *     and after it; step is what c is mapped to, symbol the symbol to which c is mapped (the separator if step is
+     *     _separator) and after_cr whether the byte before c is a carriage return
      * @param bytes [0..n-1] bytes of the file
      * @param i the first byte to process
      * @param lim the byte after the last one to process; bytes[lim] is the byte after it if lim < n
@@ -208,13 +209,13 @@ struct fasta_transform {
 };
 
 /**
- * @brief a sampled text position of a FASTA file: the offset in the file of the byte that yields the symbol at that
- *        position and the state of the transformation before that byte; a reader of the text starts at the last
+ * @brief a sampled text position of a FASTA file: the offset in the file of the byte that is mapped to the symbol at
+ *        that position and the state of the transformation before that byte; a reader of the text starts at the last
  *        sample at or before the position it reads (see fasta_text_reader)
  */
 struct fasta_sample {
     uint64_t pos;    // position in the text
-    uint64_t offset; // offset in the FASTA file of the byte yielding the symbol at pos
+    uint64_t offset; // offset in the FASTA file of the byte that is mapped to the symbol at pos
     uint8_t state;   // state of the transformation before that byte (see fasta_transform::state_t::to_bits)
 };
 
@@ -227,7 +228,7 @@ private:
     uint64_t n; // n, the size of the file
 
 public:
-    // number of bytes a window of the file has at most (see fasta_window): all of them
+    // maximum number of bytes of a window of the file (see fasta_window): the whole file
     static constexpr uint64_t block = std::numeric_limits<uint64_t>::max();
 
     memory_file(const uint8_t* data, uint64_t n) : data(data), n(n) { }
@@ -279,8 +280,8 @@ struct fasta_window {
 
 /**
  * @brief the result of scanning a chunk (a byte range) of a FASTA file (see scan_fasta_range). If a masked run
- *        contains the boundary between two chunks, both chunks yield a separator for it; the separator of the second
- *        chunk is dropped when the chunks are merged (see append_fasta_chunk).
+ *        contains the boundary between two chunks, the texts of both chunks contain a separator for it; the separator
+ *        of the second chunk is dropped when the chunks are merged (see append_fasta_chunk).
  */
 struct fasta_chunk {
     uint64_t text_size = 0; // length of the text of the chunk
@@ -294,11 +295,13 @@ struct fasta_chunk {
     fasta_transform::state_t start_state; // the state before the first byte of the chunk (see scan_fasta_lines)
     fasta_transform::state_t end_state; // the state after the last byte of the chunk (see scan_fasta_lines)
 
-    // the line events of scan_fasta_lines; a derived chunk replaces them
+    // the line events of scan_fasta_lines (empty here; a derived chunk type defines its own)
     void header_start() { } // the '>' of a header line
     void header_bytes(const uint8_t*, uint64_t) { } // bytes of a header line (see fasta_transform::walk)
-    void sequence_symbols(uint64_t) { } // a number of body bytes of the current line that yield a symbol
-    void line_end(bool, bool) { } // a line feed ends a header line (true) or another line; after a carriage return
+    void sequence_symbols(uint64_t) { } // a number of body bytes of the current line that are mapped to a symbol
+    // a line feed that ends a header line (first argument true) or another line; the second argument is true if a
+    // carriage return precedes the line feed
+    void line_end(bool, bool) { }
 };
 
 /** @brief the length, the symbol frequencies and the samples of the text of a FASTA file */
@@ -325,7 +328,7 @@ struct fasta_scan_params {
     uint64_t num_threads = 1; // maximum number of threads
     uint64_t sample_period = fasta_sample_period; // a sample every sample_period positions (0: none)
     uint64_t min_chunk_bytes = fasta_min_chunk_bytes; // minimum number of bytes of a chunk
-    phase_progress* progress = nullptr; // if not nullptr, counts the bytes scanned
+    phase_progress* progress = nullptr; // if not nullptr, the scanned bytes are counted in it
 };
 
 /**
@@ -346,11 +349,11 @@ private:
 
     chunk_t& out; // the chunk
     const fasta_transform& transform; // the transformation
-    const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    const bool keeps; // whether every body byte is mapped to itself (see fasta_transform::keeps_body_bytes)
     const uint64_t sample_period; // a sample every sample_period positions of the chunk (0: none)
     uint64_t next_sample; // position of the next sample
-    bool first_symbol = true; // no symbol has been yielded yet
-    // (writes) [0..255] body_symbol[c] = the symbol that the body byte c yields, or masked_body if it is masked
+    bool first_symbol = true; // no symbol has been added yet
+    // (writes) [0..255] body_symbol[c] = the symbol to which the body byte c is mapped, or masked_body if c is masked
     std::array<uint16_t, 256> body_symbol {};
 
 public:
@@ -360,12 +363,12 @@ public:
     uint64_t written = 0; // (writes) the number of symbols written to dst
 
 private:
-    // adds a symbol that the byte at offset yields, where before is the state before it
+    // adds the symbol to which the byte at offset is mapped; before is the state before that byte
     void yield(uint8_t symbol, uint64_t offset, const state_t& before, step_t step, bool in_header_after);
 
-    /* (writes) processes the body bytes of body() if they are not kept as they are (see fasta_transform::body_step):
-       writes their symbols to dst; at most min(len, capacity - written) bytes are processed (each yields at most one
-       symbol) */
+    /* (writes) processes the body bytes of body() if they are not kept as they are (see fasta_transform::body_step)
+       and writes their symbols to dst; at most min(len, capacity - written) bytes are processed (each is mapped to at
+       most one symbol) */
     uint64_t write_body(const uint8_t* bytes, uint64_t len, uint64_t i, state_t& st);
 
 public:
@@ -397,7 +400,7 @@ public:
  * @param out the result; out.start_state is the state before begin; out.end_state is set to the state after end - 1
  * @param sample_period a sample is taken every sample_period positions of the chunk (0: none); the position 0 of
  *        the chunk is never sampled, since the state before its first symbol depends on the chunk before
- * @param progress if not nullptr, counts the bytes scanned
+ * @param progress if not nullptr, the scanned bytes are counted in it
  */
 template <typename bytes_t, typename chunk_t>
 inline void scan_fasta_range(bytes_t& in, uint64_t begin, uint64_t end, const fasta_transform& transform,
@@ -408,8 +411,8 @@ inline void scan_fasta_range(bytes_t& in, uint64_t begin, uint64_t end, const fa
  *        file is split into chunks of at least min_chunk_bytes bytes at arbitrary offsets, and rounds of up to
  *        num_threads consecutive chunks are scanned at the same time, one chunk per thread (see scan_fasta_range).
  *        A chunk after the first one is scanned as if a record started before it, at a line start if the byte before
- *        it is a line feed and inside a sequence line else; after each round, a chunk whose state at its start
- *        differs from the state at the end of the chunk before it is scanned again, then the chunks are appended to
+ *        it is a line feed and inside a sequence line else. After each round, a chunk whose state at its start
+ *        differs from the state at the end of the chunk before it is scanned again. Then the chunks are appended to
  *        the text in the order of their positions (see append_fasta_chunk).
  * @tparam chunk_t type of the result of a chunk (derived from fasta_chunk)
  * @param open returns a new reader of the file (a direct_reader or a memory_file)
@@ -424,15 +427,15 @@ inline fasta_scan scan_fasta_lines(open_fnc_t open, const fasta_transform& trans
     merge_fnc_t merge);
 
 /**
- * @brief the handler of fasta_transform::walk that writes the yielded symbols to dst (or skips them, if dst is nullptr)
- *        and stops the walk when len symbols have been written
+ * @brief the handler of fasta_transform::walk that writes the symbols to which the bytes are mapped to dst (or skips
+ *        them, if dst is nullptr) and stops the walk when len symbols have been written
  */
 struct fasta_symbol_writer {
     using state_t = fasta_transform::state_t;
     using step_t = fasta_transform::step_t;
 
     const fasta_transform& transform; // the transformation
-    const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    const bool keeps; // whether every body byte is mapped to itself (see fasta_transform::keeps_body_bytes)
     uint8_t* dst; // the destination
     uint64_t len; // the number of symbols to write
     uint64_t written = 0; // the number of symbols written
@@ -464,13 +467,13 @@ private:
     using step_t = fasta_transform::step_t;
 
     const fasta_transform& transform; // the transformation
-    bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    bool keeps; // whether every body byte is mapped to itself (see fasta_transform::keeps_body_bytes)
     const fasta_sample* samples; // [0..num_samples-1] the samples, in increasing order of their positions
     uint64_t num_samples; // the number of samples
     bytes_t file; // the file
     fasta_window<bytes_t> window; // the bytes of the file around offset
     uint64_t offset = 0; // offset in the file of the next byte to scan
-    uint64_t next = std::numeric_limits<uint64_t>::max(); // position in the text of the next symbol the scan yields
+    uint64_t next = std::numeric_limits<uint64_t>::max(); // position in the text of the next symbol written by scan
     state_t state; // state of the transformation before the byte at offset
 
     // continues the scan at the last sample at or before pos and stops before the symbol at pos
@@ -508,8 +511,8 @@ public:
 
 /**
  * @brief follows the state of the transformation over bytes of a FASTA file (see fasta_transform::walk) without
- *        yielding symbols; the state may be unknown in in_masked_run at the start, which the next body byte or header
- *        line settles (known)
+ *        producing symbols; in_masked_run may be unknown at the start and is determined by the next body byte or
+ *        header line (see known)
  */
 struct fasta_state_walker {
     using state_t = fasta_transform::state_t;
@@ -517,7 +520,7 @@ struct fasta_state_walker {
 
     const fasta_transform& transform; // the transformation
     bool known; // whether in_masked_run is known
-    bool stop_when_known = false; // the walk stops directly after the byte that settles in_masked_run
+    bool stop_when_known = false; // the walk stops directly after the byte that determines in_masked_run
     bool stop_at_header = false; // the walk stops directly after the '>' of the first header line
     bool stop_after_line_start = false; // the walk stops directly after the byte that ends the start of a line
     bool header_found = false; // a header line has started
@@ -561,9 +564,9 @@ struct fasta_range_bound {
 /**
  * @brief returns the first offset at or after pos at which the state of the transformation follows from the line it
  *        is in, so that a range of the file starting there can be read without the bytes before that line: the state
- *        at the start of the line is known except in_masked_run, the line is walked to pos (if pos lies more than a
- *        window after the start of the line, only the first byte of the line, which tells its type, and the byte
- *        before pos) and on until the next body byte or header line settles in_masked_run
+ *        at the start of the line is known except in_masked_run, and the line is walked to pos (if pos lies more than a
+ *        window after the start of the line, only the first byte of the line, which determines its type, and the byte
+ *        before pos) and on until in_masked_run is determined by the next body byte or header line
  * @param in the file
  * @param pos [1..size-1] the offset
  * @param line the start of the line containing pos (the offset after the last line feed before pos, or 0)
@@ -591,8 +594,8 @@ inline std::vector<fasta_range_bound> fasta_range_starts(open_fnc_t open, const 
 
 /**
  * @brief reads the text of a FASTA file from the start of a range on (see fasta_range_start) in blocks: first the text
- *        of the range, whose length, samples and line events go to a chunk (see scan_fasta_range; not the symbol
- *        frequencies, see fasta_range_scanner), then the text after the range; no block contains symbols of both
+ *        of the range, whose length, samples and line events are added to a chunk (see scan_fasta_range; not the
+ *        symbol frequencies, see fasta_range_scanner), then the text after the range; no block contains symbols of both
  * @tparam bytes_t type of the file (direct_reader or memory_file)
  * @tparam chunk_t type of the chunk (derived from fasta_chunk)
  */
@@ -600,15 +603,15 @@ template <typename bytes_t, typename chunk_t = fasta_chunk>
 class fasta_range_reader {
 private:
     const fasta_transform& transform; // the transformation
-    const bool keeps; // whether every body byte yields itself (see fasta_transform::keeps_body_bytes)
+    const bool keeps; // whether every body byte is mapped to itself (see fasta_transform::keeps_body_bytes)
     bytes_t file; // the file
     fasta_window<bytes_t> window; // the bytes of the file around offset
     uint64_t offset; // offset in the file of the next byte to read
     uint64_t end; // offset in the file after the last byte of the range
     fasta_transform::state_t state; // the state of the transformation before the byte at offset
     chunk_t& chunk; // the chunk of the range
-    fasta_range_scanner<chunk_t, true> scanner; // reads the text of the range
-    phase_progress* progress; // if not nullptr, counts the bytes of the range read
+    fasta_range_scanner<chunk_t, true> scanner; // the scanner of the text of the range
+    phase_progress* progress; // if not nullptr, the read bytes of the range are counted in it
 
 public:
     /**
@@ -619,7 +622,7 @@ public:
      * @param end the offset after the last byte of the range
      * @param chunk the chunk of the range (reset here)
      * @param sample_period a sample every sample_period positions of the range (0: none, see scan_fasta_range)
-     * @param progress if not nullptr, counts the bytes of the range read
+     * @param progress if not nullptr, the read bytes of the range are counted in it
      */
     fasta_range_reader(bytes_t&& file, const fasta_transform& transform, const fasta_range_bound& begin,
         uint64_t end, chunk_t& chunk, uint64_t sample_period, phase_progress* progress)

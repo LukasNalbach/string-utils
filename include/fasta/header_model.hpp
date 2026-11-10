@@ -72,11 +72,11 @@ private:
     // number of token operations
     static constexpr uint64_t num_token_ops = 4;
 
-    // number of token positions with their own contexts; the positions from this one on share the contexts of the last
-    // one
+    // number of token positions with their own contexts; the tokens at positions header_token_positions - 1 and after
+    // are coded in the same contexts
     static constexpr uint64_t header_token_positions = 64;
 
-    // number of decimal digits of the numbers that the operation op_delta codes (all of them fit into an int64_t)
+    // maximum number of decimal digits of a number coded with op_delta (such numbers fit into an int64_t)
     static constexpr uint64_t max_delta_digits = std::numeric_limits<int64_t>::digits10;
 
     // number of decimal digits
@@ -120,7 +120,7 @@ private:
         }
     }
 
-    // symbol of a digit or a letter token that ends it
+    // the end symbol of a digit or a letter token
     static constexpr uint64_t digit_end = num_decimal_digits;
     static constexpr uint64_t letter_end = num_letters;
     // context values of "no symbol"

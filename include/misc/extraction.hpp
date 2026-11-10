@@ -136,7 +136,7 @@ public:
         // writes the buffered bytes to the file; throws if the interval has not been written completely
         void finish()
         {
-            if (pos != end) throw std::runtime_error("extraction did not fill its file interval");
+            if (pos != end) throw std::runtime_error("an extraction writer did not write its whole file interval");
             flush();
         }
 
@@ -226,7 +226,7 @@ using extract_range_t = std::pair<uint64_t, uint64_t>;
  * @param num_symbols the sum of the lengths of the ranges
  * @param path the path of the output file
  * @param p the number of threads
- * @param progress counts the extracted symbols
+ * @param progress the extracted symbols are counted in it
  */
 template <typename parsing_t>
 void extract_phrases_to_file(const parsing_t& parsing, const std::vector<extract_range_t>& ranges,
@@ -239,7 +239,7 @@ void extract_phrases_to_file(const parsing_t& parsing, const std::vector<extract
  * @param parsing the parsing
  * @param ranges the ranges (position, length), with 1 <= length <= n - position
  * @param p the number of threads
- * @param progress counts the extracted symbols
+ * @param progress the extracted symbols are counted in it
  * @param write called as write(symbols, length) for each window
  */
 template <typename parsing_t, typename write_fnc_t>
@@ -255,7 +255,7 @@ void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t
  * @param ranges the ranges (position, length), with 1 <= length <= n - position
  * @param sibling_file the temporary file is created in the directory of this file (see temporary_file_path)
  * @param p the number of threads
- * @param progress counts the extracted symbols
+ * @param progress the extracted symbols are counted in it
  * @param write called as write(symbols, length) for each window
  */
 template <typename parsing_t, typename write_fnc_t>
@@ -270,7 +270,7 @@ void extract_windows_in_order(const parsing_t& parsing, const std::vector<extrac
  * @param out the stream the text is written to
  * @param newline_after_range whether a newline is written after each range
  * @param p the number of threads
- * @param progress counts the extracted symbols
+ * @param progress the extracted symbols are counted in it
  */
 template <typename parsing_t>
 void extract_windows(const parsing_t& parsing, const std::vector<extract_range_t>& ranges, std::ostream& out,

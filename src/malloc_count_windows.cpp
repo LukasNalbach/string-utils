@@ -200,7 +200,7 @@ bool use_large_pages()
  */
 void* allocate_block(uint64_t size, uint64_t alignment, uint64_t align_offset, bool zero)
 {
-    // the allocation holds the header, the block and the bytes skipped to align the block
+    // the allocation contains the header, the block and the bytes skipped to align the block
     const bool needs_padding = alignment > natural_alignment || align_offset % natural_alignment != 0;
     const uint64_t padding = needs_padding ? alignment - 1 : 0;
     if (size > std::numeric_limits<size_t>::max() - header_bytes - padding) return nullptr;

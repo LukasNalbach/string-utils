@@ -28,8 +28,8 @@
  * @file cli_help.hpp
  * @brief the command-line interface of the tools: the help of a mode in one layout (a description, the usage line, the
  *        arguments and the options in groups, in the order arguments, input, what is stored or computed, encodings,
- *        output, execution, measurement; each option first lists the values it takes, then its explanation), reading
- *        the arguments with checked values, and running a mode with uniform error messages and exit codes
+ *        output, execution, measurement; for each option, the allowed values are listed first, then its explanation),
+ *        reading the arguments with checked values, and running a mode with uniform error messages and exit codes
  */
 
 #ifndef STRING_UTILS_MISC_CLI_HELP_HPP
@@ -72,7 +72,7 @@ inline constexpr char fasta_header_start = '>';
 inline constexpr std::string_view fasta_default_alphabet = "ACGT";
 
 /**
- * @brief formats a default value for a help, as an output stream writes it (e.g. 1, 0.05)
+ * @brief formats a default value for a help as it is written to an output stream (e.g. 1, 0.05)
  * @param value the value
  * @return the formatted value
  */
@@ -120,7 +120,7 @@ public:
     /**
      * @brief prints an option or an argument
      * @param name the option with its placeholder, e.g. "-p <threads>"
-     * @param values the values it takes, e.g. "integer >= 1 (default: 1)"; empty for an option without a value
+     * @param values the allowed values, e.g. "integer >= 1 (default: 1)"; empty for an option without a value
      * @param explanation what it does (wrapped; a '\n' starts a new paragraph)
      */
     void option(std::string_view name, std::string_view values, std::string_view explanation = "")
@@ -150,7 +150,8 @@ public:
     // prints the option -m <file> <name> (see read_measurement_option)
     void option_measurement()
     {
-        option("-m <file> <name>", "a path and a name", "append measurement data to this file; <name> names the text");
+        option("-m <file> <name>", "a path and a name",
+            "append measurement data to this file; <name> is the name of the text");
     }
 
     /**
@@ -486,9 +487,9 @@ void require_created(const stream_t& stream, const std::string& path)
 // ############################# RUNNING A MODE #############################
 
 /**
- * @brief runs a mode of a tool: without arguments or with -h or --help, it prints the help to stdout (exit code 0);
- *        a usage_error is printed to stderr as "error: <message>", followed by the help, any other exception as
- *        "error: <message>" (exit code 1); an open phase line is ended first (see end_phase_line)
+ * @brief runs a mode of a tool. Without arguments or with -h or --help, it prints the help to stdout (exit code 0).
+ *        A usage_error is printed to stderr as "error: <message>", followed by the help, any other exception as
+ *        "error: <message>" (exit code 1). An open phase line is ended first (see end_phase_line).
  * @tparam help_fnc_t type of print_help
  * @tparam run_fnc_t type of run
  * @param argc the number of command-line arguments

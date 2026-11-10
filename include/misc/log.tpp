@@ -126,7 +126,7 @@ inline void log_component(const std::string& name, uint64_t bytes, uint64_t dept
     const uint64_t level = depth + listing_indent;
     const std::string line = std::string(2 * level, ' ') + name + ": " + format_share(bytes) + "\n";
 
-    // a component below the heading of the open group belongs to it, one at level 0 ends it
+    // a component below the heading of the open group belongs to the group, a component at level 0 ends the group
     if (!component_group.title.empty()) {
         if (level > 0) {
             if (level == 1) component_group.bytes += bytes;
@@ -239,7 +239,7 @@ inline void log_phase_start(bool log, std::chrono::steady_clock::time_point& tim
         phase_line_open = !msg.empty() && msg.back() != '\n';
         phase_detail_added = false;
 
-        // an empty message starts the phase without output (see log_grouped)
+        // with an empty message, the phase is started without output (see log_grouped)
         if (!msg.empty()) {
             log_last_line_empty = false;
             log_out() << msg << std::flush;
@@ -467,7 +467,7 @@ inline void log_grouped(bool log, const std::string& action, const std::string& 
         ? std::pair<std::string, std::string>(item, std::string())
         : std::pair<std::string, std::string>(item.substr(0, open), item.substr(open + 2, item.size() - open - 3));
 
-    // another qualifier starts a new line, unless the item has the name of the previous one
+    // an item with another qualifier is printed in a new line, unless it has the name of the previous item
     if (!log_group.items.empty() && log_group.items.back().second != entry.second
         && log_group.items.back().first != entry.first) flush_log_group();
 

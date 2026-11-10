@@ -26,8 +26,8 @@
 
 /**
  * @file position_map.hpp
- * @brief the map of the positions of a FASTA file to the positions of its sequence text (see split.hpp) and back, and
- *        the restoration of ranges of the file from the ranges of the sequence text they cover
+ * @brief a map from the positions of a FASTA file to the positions of its sequence text (see split.hpp) and back, and
+ *        the restoration of ranges of the file from the symbols of the sequence text in these ranges
  */
 
 #ifndef STRING_UTILS_FASTA_POSITION_MAP_HPP
@@ -76,7 +76,7 @@ public:
 private:
     std::string line_end; // the line end
     std::string header_lines; // the header lines with fasta_header_marker and their line ends, in their order
-    std::vector<piece> pieces; // the pieces in their order, then one at the end of the file with every line end
+    std::vector<piece> pieces; // the pieces in their order, then a piece with line length 0 that starts at the end of the file
     uint64_t size = 0; // the size of the file in bytes
 
     // returns the index of the piece that contains a position of the file
@@ -192,7 +192,7 @@ public:
     }
 
     /**
-     * @brief returns the ranges of the sequence text that ranges of the file cover, without the empty ones
+     * @brief returns the ranges of the sequence text whose symbols lie in ranges of the file, without the empty ones
      * @param ranges the ranges of the file (position, length), with position + length <= file_size()
      * @return the ranges of the sequence text (position, length), in the order of the ranges of the file
      */
@@ -211,9 +211,9 @@ public:
 };
 
 /**
- * @brief writes ranges of a FASTA file: their header lines and line ends from a fasta_position_map, their sequence
- *        bytes from the symbols of the sequence text they cover (see fasta_position_map::text_ranges), which are passed
- *        in consecutive pieces (see append)
+ * @brief writes ranges of a FASTA file: the header lines and line ends in the ranges are taken from a
+ *        fasta_position_map, the sequence bytes from the symbols of the sequence text in the ranges (see
+ *        fasta_position_map::text_ranges), which are passed in consecutive pieces (see append)
  */
 class fasta_range_writer {
 private:
@@ -277,8 +277,8 @@ public:
         : map(map), out(out), ranges(ranges) { start_range(); }
 
     /**
-     * @brief writes the next symbols of the sequence text that the ranges cover, with the headers and the line ends
-     *        between them
+     * @brief writes the next symbols of the sequence text in the ranges, with the headers and the line ends between
+     *        them
      * @param T the symbols
      * @param len their number
      */

@@ -188,11 +188,11 @@ template <uint8_t num_bytes> inline constexpr bool is_packed_unsigned_v<packed_u
 template <uint8_t bytes>
 using uint_of_width_t = std::conditional_t<std::has_single_bit(bytes), builtin_uint_t<bytes>, packed_unsigned<bytes>>;
 
-// returns the fewest whole bytes (at least one) that hold the value x
+// returns the smallest number of bytes (at least one) in which the value x can be stored
 inline constexpr uint8_t byte_width(uint64_t x) { return uint8_t(std::max<int>(1, (std::bit_width(x) + 7) / 8)); }
 
-// the largest value that is stored with 40 bits (uint40_t); larger values are stored with 48 bits (uint48_t); a
-// build can set it lower to test the 48-bit variants (see cmake/settings.cmake)
+// the largest value that is stored with 40 bits (uint40_t); larger values are stored with 48 bits (uint48_t); it
+// can be set lower in a build to test the 48-bit variants (see cmake/settings.cmake)
 #ifndef STRING_UTILS_MAX_NARROW_VALUE
 #define STRING_UTILS_MAX_NARROW_VALUE ((uint64_t { 1 } << 40) - 1)
 #endif

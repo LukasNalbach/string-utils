@@ -102,10 +102,10 @@ enum class file_access : uint8_t {
     read_write // creates a file or truncates an existing one, and reads and writes it
 };
 
-/* alignment in bytes that unbuffered I/O (O_DIRECT, FILE_FLAG_NO_BUFFERING) requires of each buffer address, file
-   offset and length: one sector of 4096 bytes, a multiple of the sector size of drives with 512-byte and 4096-byte
-   sectors; on macOS one page of Apple silicon (16 KiB), since F_NOCACHE reads and writes smaller or unaligned ranges
-   through the page cache */
+/* alignment in bytes of each buffer address, file offset and length with unbuffered I/O (O_DIRECT,
+   FILE_FLAG_NO_BUFFERING): one sector of 4096 bytes, a multiple of the sector size of drives with 512-byte and
+   4096-byte sectors; on macOS one page of Apple silicon (16 KiB), since with F_NOCACHE, smaller or unaligned ranges are
+   read and written through the page cache */
 #ifdef __APPLE__
 inline constexpr uint64_t direct_io_alignment = 16 * 1024;
 #else
@@ -136,15 +136,15 @@ inline constexpr bool has_page_cache_control = false;
 int open_file(const std::string& path, file_access access, bool direct);
 
 /**
- * @brief opens a file for reading such that reopen_path(fd, path) names the opened file as long as the descriptor is
- *        open; the file can be renamed meanwhile (reopen_path returns the new path), but not written
+ * @brief opens a file for reading such that reopen_path(fd, path) returns a path of the opened file as long as the
+ *        descriptor is open; the file can be renamed meanwhile (reopen_path returns the new path), but not written
  * @param path path of the file (UTF-8)
  * @return the descriptor, or -1 if the file cannot be opened
  */
 int open_pinned(const std::string& path);
 
-// returns a path that opens the file of a descriptor returned by open_pinned(path): its current path (path if that
-// cannot be determined)
+// returns a path with which the file of a descriptor returned by open_pinned(path) can be opened: its current path
+// (path if that cannot be determined)
 std::string reopen_path(int fd, const std::string& path);
 
 // closes a descriptor; returns 0 on success
@@ -191,8 +191,8 @@ bool set_size(int fd, uint64_t size);
 // waits until the written data of the file is on the disk; Windows keeps unbuffered and buffered I/O coherent
 inline bool sync_data(int) { return true; }
 
-/* marks the file as sparse: extending the file and writing far behind the written data does not write zeros into the
-   gap first (on NTFS, a write behind the valid data length fills the gap with zeros) */
+/* marks the file as sparse, so that no zeros are written into the gap when the file is extended or written far behind
+   the written data (on NTFS, the gap before a write behind the valid data length is otherwise filled with zeros) */
 void make_sparse(int fd);
 
 // drops the pages of the bytes [off..off+len-1] (len = 0: up to the end) of the file from the page cache
@@ -248,16 +248,17 @@ inline int open_file(const std::string& path, file_access access, bool direct)
 }
 
 /**
- * @brief opens a file for reading such that reopen_path(fd, path) names the opened file as long as the descriptor is
- *        open, even if the file is deleted or replaced meanwhile
+ * @brief opens a file for reading such that reopen_path(fd, path) returns a path of the opened file as long as the
+ *        descriptor is open, even if the file is deleted or replaced meanwhile
  * @param path path of the file
  * @return the descriptor, or -1 if the file cannot be opened
  */
 inline int open_pinned(const std::string& path) { return ::open(path.c_str(), O_RDONLY); }
 
 #ifdef __APPLE__
-// returns a path that opens the file of a descriptor returned by open_pinned(path): its current path (F_GETPATH; macOS
-// has no /proc/self/fd), path if that cannot be determined, or an empty path if the file at that path is another file
+// returns a path with which the file of a descriptor returned by open_pinned(path) can be opened: its current path
+// (F_GETPATH; macOS has no /proc/self/fd), path if that cannot be determined, or an empty path if the file at that path
+// is another file
 inline std::string reopen_path(int fd, const std::string& path)
 {
     char buffer[MAXPATHLEN];
@@ -267,7 +268,7 @@ inline std::string reopen_path(int fd, const std::string& path)
     return opened.st_dev == named.st_dev && opened.st_ino == named.st_ino ? current : std::string();
 }
 #else
-// returns a path that opens the file of a descriptor returned by open_pinned(path)
+// returns a path with which the file of a descriptor returned by open_pinned(path) can be opened
 inline std::string reopen_path(int fd, const std::string&) { return "/proc/self/fd/" + std::to_string(fd); }
 #endif
 
@@ -315,7 +316,7 @@ inline file_offset_t seek_end(int fd) { return lseek(fd, 0, SEEK_END); }
 // sets the length of the file to size bytes (truncates or extends it); returns whether this succeeded
 inline bool set_size(int fd, uint64_t size) { return ::ftruncate(fd, off_t(size)) == 0; }
 
-// marks the file as sparse (files on Linux and APFS are sparse: extending a file allocates no blocks)
+// marks the file as sparse (files on Linux and APFS are sparse: no blocks are allocated when a file is extended)
 inline void make_sparse(int) {}
 
 #ifdef __APPLE__
@@ -518,7 +519,7 @@ public:
         return num;
     }
 
-    // returns a bound on the CPUs in the set: every CPU in it is smaller
+    // returns an upper bound on the CPUs in the set: every CPU in the set is smaller than it
     uint64_t end() const { return groups.size() * cpus_per_group; }
 
     // adds the CPUs of another set
@@ -635,7 +636,7 @@ inline bool get_thread_cpus(cpu_mask& cpus)
     return true;
 }
 
-// restricts the calling thread to a set of CPUs; macOS cannot, so this fails
+// restricts the calling thread to a set of CPUs; macOS does not support this, so the call fails
 inline bool set_thread_cpus(const cpu_mask&) { return false; }
 
 // returns a string that is equal for all CPUs of the same physical core as CPU cpu, and only for them; macOS numbers
@@ -664,7 +665,7 @@ public:
     // returns the number of CPUs in the set
     uint64_t count() const { return uint64_t(CPU_COUNT(&cpus)); }
 
-    // returns a bound on the CPUs in the set: every CPU in it is smaller
+    // returns an upper bound on the CPUs in the set: every CPU in the set is smaller than it
     uint64_t end() const { return CPU_SETSIZE; }
 
     // adds the CPUs of another set
@@ -739,14 +740,14 @@ inline std::string core_of_cpu(uint64_t cpu)
 
 #ifdef __APPLE__
 /**
- * @brief a thread with a stack of STRING_UTILS_STACK_BYTES bytes (std::thread gets 512 KiB on macOS); the part of the
+ * @brief a thread with a stack of STRING_UTILS_STACK_BYTES bytes (a std::thread has 512 KiB on macOS); the part of the
  *        interface of std::thread that is used: construction from a callable, move, joinable and join
  */
 class thread {
     pthread_t handle {};
     bool running = false;
 
-    // runs and deletes the callable; an exception that leaves it calls std::terminate (as in std::thread)
+    // runs and deletes the callable; if an exception leaves it, std::terminate is called (as in std::thread)
     template <typename fnc_t>
     static void* run(void* fnc) noexcept
     {
@@ -852,13 +853,13 @@ inline void unset_env(const char* name) { _putenv_s(name, ""); }
 // returns whether a path lies on a RAM disk (false if the drive type cannot be determined)
 bool is_ram_disk(const std::string& path);
 
-// the directory for temporary files if the system does not name one: the current directory
+// the directory for temporary files if the system does not specify one: the current directory
 inline constexpr const char* fallback_temporary_directory = ".";
 
 /**
  * @brief prepares the process: standard output and standard error in binary mode (no "\r\n" for "\n", as on Linux),
- *        escape sequences in the console, a stack of STRING_UTILS_STACK_BYTES bytes for the threads of OpenMP (the main
- *        thread gets it from the linker) and large pages (see enable_large_pages)
+ *        escape sequences in the console, a stack of STRING_UTILS_STACK_BYTES bytes for the threads of OpenMP (the
+ *        stack size of the main thread is set by the linker) and large pages (see enable_large_pages)
  */
 void init();
 
@@ -892,7 +893,7 @@ inline bool is_ram_disk(const std::string& path)
 }
 #endif
 
-// the directory for temporary files if the system does not name one
+// the directory for temporary files if the system does not specify one
 inline constexpr const char* fallback_temporary_directory = "/tmp";
 #endif
 

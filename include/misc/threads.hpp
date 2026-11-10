@@ -101,10 +101,10 @@ inline bool set_affinity_to_allowed_cpus(const platform::cpu_mask& cpus = allowe
 }
 
 /**
- * @brief sets the affinity of the calling thread to a set of CPUs while in scope and restores it afterwards; while in
- *        scope, the set is also the set of CPUs the thread may run on (see allowed_cpus); threads not created by OpenMP
- *        and child processes started meanwhile inherit the affinity, other threads the code in scope starts get it
- *        with full_affinity(cpus())
+ * @brief sets the affinity of the calling thread to a set of CPUs while in scope and restores it afterwards. While in
+ *        scope, the set is also the set of CPUs the thread may run on (see allowed_cpus). Threads not created by OpenMP
+ *        and child processes started meanwhile inherit the affinity; for other threads started by the code in scope,
+ *        it is set with full_affinity(cpus()).
  */
 class full_affinity {
     platform::cpu_mask _cpus; // the CPUs the calling thread runs on while in scope
@@ -139,9 +139,9 @@ public:
 /**
  * @brief makes the threads of an OpenMP parallel region run on the CPUs of the full_affinity in scope on the thread
  *        that starts the region (OpenMP places the threads by OMP_PLACES and OMP_PROC_BIND, those of a nested region on
- *        the places of the enclosing region, and ignores the affinity of the starting thread): declared before the
- *        region and passed to it as firstprivate, the copy of each thread sets the affinity of the thread while the
- *        region runs (see full_affinity); without a full_affinity in scope, the copies do nothing
+ *        the places of the enclosing region, and ignores the affinity of the starting thread). An object is declared
+ *        before the region and passed to it as firstprivate; the copy constructor sets the affinity of each thread
+ *        while the region runs (see full_affinity). Without a full_affinity in scope, the copies do nothing.
  */
 class region_affinity {
     const platform::cpu_mask* _cpus = scoped_cpus; // the CPUs of the full_affinity in scope on the starting thread
@@ -161,9 +161,9 @@ public:
 /**
  * @brief writes a byte of each page of a buffer with the threads of a parallel region, each a contiguous part of the
  *        pages, so that the pages of a buffer that has not been written yet are placed on the NUMA nodes of the threads
- *        (a page is placed on the node of the thread that writes it first); the threads are those the calling thread
- *        may run on (see region_affinity); a buffer of fewer pages than threads, or a call inside a parallel region,
- *        leaves the buffer as it is
+ *        (a page is placed on the node of the thread that writes it first). The threads run on the CPUs the calling
+ *        thread may run on (see region_affinity). If the buffer has fewer pages than there are threads, or if the
+ *        function is called inside a parallel region, the buffer is not written.
  * @param data the buffer
  * @param size its size in bytes
  */
@@ -266,8 +266,8 @@ inline const std::vector<cpu_node_t>& machine_cpu_topology()
 }
 
 /**
- * @brief returns the NUMA nodes with the cores of the CPUs a set allows (see machine_cpu_topology); a node or core
- *        without an allowed CPU is left out
+ * @brief returns the NUMA nodes with the cores of the CPUs in a set of allowed CPUs (see machine_cpu_topology); a node
+ *        or core without an allowed CPU is left out
  * @param allowed the CPUs the threads may run on
  * @return the nodes in increasing order of their numbers; empty if the topology cannot be read (not on Linux)
  */
@@ -291,10 +291,10 @@ inline std::vector<cpu_node_t> cpu_topology(const platform::cpu_mask& allowed)
 }
 
 /**
- * @brief reserves cores of one NUMA node for the threads of a task while in scope, one thread per physical core: on
- *        the node with the most allowed cores (see allowed_cpus) that no other node_cores in scope has reserved, the
- *        cores with the fewest reservations; without topology information (see cpu_topology), all allowed CPUs; the
- *        threads of the task run on cpus() (see full_affinity)
+ * @brief reserves cores of one NUMA node for the threads of a task while in scope, one thread per physical core. The
+ *        node is the one with the most allowed cores (see allowed_cpus) that no other node_cores in scope has
+ *        reserved; on it, the cores with the fewest reservations are reserved. Without topology information (see
+ *        cpu_topology), all allowed CPUs are used. The threads of the task run on cpus() (see full_affinity).
  */
 class node_cores {
     platform::cpu_mask _cpus; // one CPU of each reserved core
@@ -362,8 +362,8 @@ public:
             [&](const cpu_core_t* x, const cpu_core_t* y) { return reserved[x->front()] < reserved[y->front()]; });
         _num_threads = std::clamp<uint64_t>(max_threads, 1, cores.size());
 
-        // the k-th reservation of a core runs on its k-th CPU (modulo the number of its CPUs), so that tasks sharing a
-        // core use its hardware threads
+        // the thread of the k-th reservation of a core runs on its k-th CPU (modulo the number of its CPUs), so that
+        // tasks sharing a core use different hardware threads of it
         for (uint64_t i = 0; i < _num_threads; i++) {
             const uint64_t first = cores[i]->front();
             cpu_core_t core = *cores[i];
@@ -419,7 +419,7 @@ inline std::vector<platform::cpu_mask> omp_thread_cpus(uint64_t num_threads)
 
 /**
  * @brief returns the number of physical cores the threads of an OpenMP parallel region may run on (CPUs of the same
- *        core, e.g., hyper-threads, count once; see omp_thread_cpus), at most the number of threads
+ *        core, e.g., hyper-threads, are counted once; see omp_thread_cpus), at most the number of threads
  * @param num_threads number of threads of the region
  */
 inline uint64_t num_cores_of_omp_team(uint64_t num_threads)
@@ -427,8 +427,8 @@ inline uint64_t num_cores_of_omp_team(uint64_t num_threads)
     platform::cpu_mask team_cpus;
     for (const platform::cpu_mask& cpus : omp_thread_cpus(num_threads)) team_cpus |= cpus;
 
-    // the cores, each given by a string naming it (see platform::core_of_cpu); a CPU without topology information
-    // counts as a core of its own
+    // the cores, each identified by a string (see platform::core_of_cpu); a CPU without topology information is counted
+    // as a core of its own
     std::set<std::string> cores;
 
     for (uint64_t cpu = 0; cpu < team_cpus.end(); cpu++) {
@@ -486,9 +486,9 @@ inline void run_on_threads(uint64_t num_threads, fnc_t fnc)
 }
 
 /**
- * @brief runs tasks at the same time, each on a thread of an OpenMP team; the thread of a task runs on the CPUs the
+ * @brief runs tasks at the same time, each on a thread of an OpenMP team. The thread of a task runs on the CPUs the
  *        calling thread may run on (see full_affinity and allowed_cpus), and nested parallel regions are enabled while
- *        the tasks run; after all tasks have finished, the exception of the first task that threw one is rethrown
+ *        the tasks run. After all tasks have finished, the exception of the first task that threw one is rethrown.
  * @param tasks the tasks; task k is called as tasks[k]()
  */
 inline void run_concurrently(const std::vector<std::function<void()>>& tasks)
@@ -515,10 +515,10 @@ inline void run_concurrently(const std::vector<std::function<void()>>& tasks)
 }
 
 /**
- * @brief runs tasks on at most max_concurrent threads at the same time (see run_concurrently): each thread runs the
- *        next task that has not been started; while task k runs, its thread reports its progress to part k of the
- *        progress line (progress_part = k, see log_progress); after all tasks have finished, the exception of the
- *        first task that threw one is rethrown
+ * @brief runs tasks on at most max_concurrent threads at the same time (see run_concurrently). Each thread runs the
+ *        next task that has not been started. While task k runs, its thread reports its progress to part k of the
+ *        progress line (progress_part = k, see log_progress). After all tasks have finished, the exception of the
+ *        first task that threw one is rethrown.
  * @param tasks the tasks; task k is called as tasks[k](); at most max_progress_parts tasks report progress
  * @param max_concurrent the maximum number of tasks that run at the same time
  */

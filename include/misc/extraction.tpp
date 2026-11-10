@@ -44,7 +44,7 @@ inline bool direct_extraction_file::open_file(const std::string& path, uint64_t 
     fd = open_direct_or_buffered(path, platform::file_access::read_write, direct);
     if (fd < 0) return false;
     if (!direct) advise_uncached(fd);
-    // the writers write far apart (see platform::make_sparse)
+    // the file is made sparse, since the writers write at offsets far apart (see platform::make_sparse)
     platform::make_sparse(fd);
 
     logical_length = length;
@@ -74,7 +74,7 @@ inline direct_extraction_file::writer::writer(direct_extraction_file& file, uint
 
 inline void direct_extraction_file::writer::write(const char* data, uint64_t length)
 {
-    if (length > end - pos) throw std::runtime_error("extraction wrote past its file interval");
+    if (length > end - pos) throw std::runtime_error("an extraction writer wrote past its file interval");
 
     while (length > 0) {
         if (cached_block == none) select_block();
@@ -153,7 +153,7 @@ inline void direct_extraction_file::writer::select_block()
         ? sector : std::min(write_block_length, aligned_end - selected);
 
     // a sector that is shared with another writer or contains bytes before the interval is read
-    // first, to preserve these bytes; a shared sector stays locked until it is written (see flush)
+    // first, to preserve these bytes; a shared sector is locked until it is written (see flush)
     if (mutex != nullptr || pos != selected) file.read_sector(selected, write_buffer);
     else if (cached_length == sector && end < selected + sector)
         std::memset(write_buffer, 0, sector);

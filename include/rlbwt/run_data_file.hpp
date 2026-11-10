@@ -26,8 +26,9 @@
 
 /**
  * @file run_data_file.hpp
- * @brief a runs file (see ext_runs): its table of contents, its fields and the parts readers keep in RAM (the record
- *        samples of the plain format; the block indexes and the symbol code of the compressed format)
+ * @brief a runs file (see ext_runs): its table of contents, its fields and the parts that are kept in RAM for the
+ *        readers (the record samples of the plain format; the block indexes and the symbol code of the compressed
+ *        format)
  */
 
 #ifndef STRING_UTILS_RLBWT_RUN_DATA_FILE_HPP
@@ -50,8 +51,8 @@
 namespace rlbwt {
 
 /**
- * @brief a runs file (see ext_runs): which sections it stores and where, its fields and the parts of it that readers
- *        keep in RAM
+ * @brief a runs file (see ext_runs): which sections it stores and where, its fields and the parts of it that are kept
+ *        in RAM for the readers
  */
 class run_data_file {
 private:
@@ -205,7 +206,7 @@ public:
     /**
      * @brief reads the bytes of a section (with O_DIRECT, see direct_reader)
      * @param id identifier of the section
-     * @param bytes stores the bytes
+     * @param bytes is set to the bytes
      * @return whether the file stores the section and it could be read
      */
     bool read_section(uint64_t id, std::string& bytes) const

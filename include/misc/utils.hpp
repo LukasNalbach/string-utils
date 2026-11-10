@@ -52,8 +52,8 @@ enum array_kind_t : uint8_t {
     _diff_access = 0,
     // like _diff_access, and supports range minimum, psv and nsv queries
     _diff_rmq = 1,
-    // like _diff_rmq, for two integer arrays of the same length (given as a sequence of pairs) that
-    // share one data structure
+    // like _diff_rmq, for two integer arrays of the same length (given as a sequence of pairs) that are
+    // stored in one data structure
     _diff_pair_rmq = 2,
     // the input is encoded as it is (e.g., a byte text); supports random access and extraction
     _plain = 3

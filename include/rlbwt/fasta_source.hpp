@@ -90,7 +90,7 @@ private:
 
     private:
         const fasta_source& src;
-        fasta_text_reader<bytes_t> text; // reads the text
+        fasta_text_reader<bytes_t> text; // the reader of the text
         no_init_vector<uint8_t> buffer; // the bytes of a read, if sym_t is not uint8_t
     };
 
@@ -104,7 +104,7 @@ private:
     uint64_t num_samples;
     bool reverse; // true <=> the text is read reversed
     bool mapped; // true <=> map is applied to each symbol
-    std::array<sym_t, 256> map {}; // [0..255] map[c] = the symbol the byte c of the text is read as
+    std::array<sym_t, 256> map {}; // [0..255] map[c] = the symbol to which the byte c of the text is mapped
 
     // returns a new reader of the bytes of the FASTA file
     auto open_file() const { return direct_reader(path); }

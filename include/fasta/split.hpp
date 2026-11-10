@@ -27,7 +27,8 @@
 /**
  * @file split.hpp
  * @brief splits a FASTA file into its parts: the header lines and the line layout, coded with context models, and the
- *        sequence text, which is read from the FASTA file (see fasta_text_reader); restore.hpp restores the file
+ *        sequence text, which is read from the FASTA file (see fasta_text_reader); the file is restored with
+ *        restore.hpp
  */
 
 #ifndef STRING_UTILS_FASTA_SPLIT_HPP
@@ -109,12 +110,12 @@ struct fasta_section {
  */
 struct fasta_parts {
     fasta_section section; // the flags, the number of records, the coded headers and the coded line layout
-    fasta_transform transform; // the transformation that yields the sequence text
+    fasta_transform transform; // the transformation that maps the FASTA file to its sequence text
     fasta_scan text; // the length, the byte frequencies and the samples of the sequence text
 };
 
 /**
- * @brief returns the transformation that yields the sequence text of a FASTA file: the bytes of the sequence lines
+ * @brief returns the transformation that maps a FASTA file to its sequence text: the bytes of the sequence lines
  *        of each record without their line ends, and a line feed between the sequences of consecutive records
  * @param crlf whether every line feed is preceded by a carriage return that belongs to the line end
  */
@@ -179,7 +180,7 @@ struct fasta_lines_chunk : fasta_chunk {
         }
     }
 
-    // appends the line the chunk ends inside, if it does
+    // appends the line in which the chunk ends, if the chunk ends inside a line
     void finish()
     {
         if (!ends_inside()) return;
@@ -197,7 +198,7 @@ struct fasta_lines_chunk : fasta_chunk {
  * @param crlf whether every line feed is preceded by a carriage return that belongs to the line end
  * @param num_threads the number of threads
  * @param min_chunk_bytes the minimum number of bytes of a chunk of the scan
- * @param progress counts the bytes scanned
+ * @param progress the scanned bytes are counted in it
  * @param line_feeds is set to the number of line feeds of the file
  * @param crlf_line_ends is set to the number of line feeds directly after a carriage return
  * @return the parts
@@ -215,7 +216,7 @@ inline fasta_parts scan_fasta_parts(open_fnc_t open, bool crlf, uint64_t num_thr
     bool in_record = false; // whether a record has started
     uint64_t L = 0; // the sequence length of the current record
     fasta_line_runs lines; // the lines of the current record
-    // the line that the last merged chunk ends inside: a header line (open_header) or a sequence line of a length
+    // the line in which the last merged chunk ends: a header line (open_header) or a sequence line of a length
     bool line_open = false, open_header = false;
     uint64_t open_length = 0;
     std::string open_text; // the bytes of the open header line
@@ -346,7 +347,8 @@ inline fasta_parts split_fasta(open_fnc_t open, uint64_t num_threads, bool log,
 }
 
 /**
- * @brief reads ranges of the sequence text of a FASTA file (see split_fasta) block by block; each thread has its own
+ * @brief reads ranges of the sequence text of a FASTA file (see split_fasta) block by block; each thread uses its own
+ *        reader
  */
 class alignas(cache_line_bytes) fasta_text_block_reader {
 private:

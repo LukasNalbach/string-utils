@@ -60,7 +60,7 @@ inline constexpr uint64_t mix_64(uint64_t x)
 inline constexpr uint64_t hash_64(uint64_t x) { return mix_64(x + golden_ratio_64); }
 
 // arithmetic modulo the Mersenne prime 2^61 - 1; a value x is reduced by adding its bits above bit 60 to its low 61
-// bits, which leaves x mod (2^61 - 1) unchanged because 2^61 = 1 (mod 2^61 - 1)
+// bits, which does not change x mod (2^61 - 1), since 2^61 = 1 (mod 2^61 - 1)
 namespace mersenne_61 {
 
 inline constexpr uint64_t exponent = 61;

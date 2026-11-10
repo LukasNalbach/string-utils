@@ -74,11 +74,12 @@ public:
 
 protected:
     // maximum width (in bits) of a vector whose entries are read and written with a single 64-bit word
-    // (an entry starts at a bit offset of at most 7 within its byte); wider entries use a uint128_t block
+    // (an entry starts at a bit offset of at most 7 within its byte); wider entries are read and written with a
+    // uint128_t block
     static constexpr uint8_t max_word_access_width = 64 - 7;
 
-    // number of bytes after the entries in data_vectors, so that the uint128_t reads and writes and the aligned
-    // 64-bit writes of set_parallel of the last entry stay in bounds
+    // number of bytes after the entries in data_vectors, so that reading or writing the last entry as a uint128_t
+    // block or with the aligned 64-bit writes of set_parallel does not access memory after data_vectors
     static constexpr uint64_t padding = std::max<uint64_t>(sizeof(uint128_t), sizeof(uint64_t));
 
     // (index of the byte in data_vectors that contains the first bit of an entry, offset of that bit in the byte)

@@ -61,7 +61,7 @@ inline auto fasta_transform::step(uint8_t c, state_t& st, uint8_t& out, line_fee
         st.at_line_start = false;
 
         if (c == fasta_header_marker) {
-            // a header yields a separator (also directly after a masked run)
+            // a header is mapped to a separator (also directly after a masked run)
             const bool yields = st.in_sequence || separator_before_first_record;
             st.in_header = true;
             st.in_sequence = true;
@@ -87,7 +87,7 @@ inline auto fasta_transform::body_step(uint8_t c, state_t& st, uint8_t& out) con
         return _symbol;
     }
 
-    // the first byte of a masked run yields the separator; the rest of the run yields nothing
+    // the first byte of a masked run is mapped to the separator, the other bytes of the run to nothing
     if (st.in_masked_run) return _nothing;
     st.in_masked_run = true;
     return _separator;
@@ -204,7 +204,7 @@ inline uint64_t fasta_range_scanner<chunk_t, writes>::write_body(const uint8_t* 
     bool masked = st.in_masked_run;
     uint64_t k = 0; // number of symbols written
     uint64_t x = 0; // number of bytes processed
-    uint64_t letters = 0; // number of bytes that yield themselves
+    uint64_t letters = 0; // number of bytes that are mapped to themselves
 
     for (; x < end; x++) {
         const uint16_t s = body_symbol[bytes[x]];
@@ -274,7 +274,7 @@ inline uint64_t fasta_range_scanner<chunk_t, writes>::body(const uint8_t* bytes,
     }
 
     if constexpr (writes) return write_body(bytes, len, i, st);
-    uint64_t symbols = 0; // number of bytes that yield a symbol
+    uint64_t symbols = 0; // number of bytes that are mapped to a symbol
     uint64_t x = 0; // number of bytes processed
 
     for (; x < len; x++) {
@@ -483,7 +483,7 @@ inline fasta_range_bound fasta_range_start(bytes_t& in, uint64_t pos, uint64_t l
             offset = window.walk(transform, offset, pos, st, walker);
         }
 
-        // in a header line in_masked_run is false; in a sequence line the byte before pos settles it
+        // in a header line, in_masked_run is false; in a sequence line, it is determined by the byte before pos
         walker.stop_after_line_start = false;
         offset = std::max(offset, pos - 1);
         st.in_masked_run = false;

@@ -26,10 +26,10 @@
 
 /**
  * @file compressor_cli.hpp
- * @brief the command-line interface of a compressor:
- *        "<tool> [options] <input_file>" compresses <input_file> into <base_name>.<ending>[.<postcompressor>],
- *        "<tool> -d [options] <input_file>" restores it; the common options, the help, the names of the output files,
- *        the measurement file, the post-compression and the decompression of a parsing into a file
+ * @brief the command-line interface of a compressor ("<tool> [options] <input_file>" compresses <input_file> into
+ *        <base_name>.<ending>[.<postcompressor>], "<tool> -d [options] <input_file>" restores the text): the common
+ *        options, the help, the names of the output files, the measurement file, the post-compression and the
+ *        decompression of a parsing into a file
  */
 
 #ifndef STRING_UTILS_MISC_COMPRESSOR_CLI_HPP
@@ -70,7 +70,7 @@ struct compressor_spec {
     std::string_view description; // what the tool does, e.g. "compresses a text into its LZ77 parsing"
     std::string_view default_postcompressor; // the default of -pc; empty <=> no post-compression (-pc, -<quality>)
     bool fasta = false; // whether the tool has a FASTA mode (-fasta)
-    bool ranges = false; // whether -d can write ranges of the text (-ranges)
+    bool ranges = false; // whether ranges of the text can be restored with -d (-ranges)
 };
 
 /** @brief the common options of a compressor */
@@ -85,7 +85,7 @@ struct compressor_cli_t {
     uint64_t quality = 0; // -<quality> (or the default of the postcompressor)
     bool quality_given = false; // whether -<quality> was given
     bool fasta = false; // whether <input_file> is compressed in the FASTA mode (see -fasta)
-    std::string path_ranges_file; // -ranges; empty <=> -d restores the whole text
+    std::string path_ranges_file; // -ranges; empty <=> the whole text is restored with -d
     bool log = true; // false <=> -q
     direct_ofstream measurement_file; // -m
     std::string text_name; // the <name> of -m
@@ -124,8 +124,8 @@ void read_compressor_cli(int argc, char** argv, const compressor_spec& spec, rea
     compressor_cli_t& cli);
 
 /**
- * @brief runs a compressor: compresses <input_file> or, with -d, restores it (see the file comment); -q writes
- *        nothing to the standard output; the errors are written to the standard error (see run_cli)
+ * @brief runs a compressor: compresses <input_file> or, with -d, restores it (see the file comment); with -q,
+ *        nothing is written to the standard output; the errors are written to the standard error (see run_cli)
  * @param argc the number of command-line arguments
  * @param argv the command-line arguments
  * @param spec the compressor
@@ -188,7 +188,7 @@ inline std::vector<extract_range_t> read_ranges_file(const std::string& path);
  * @param out the output
  * @param sibling_file see extract_windows_in_order
  * @param p the number of threads
- * @param progress counts the extracted symbols of the sequence text; its total is set to their number
+ * @param progress the extracted symbols of the sequence text are counted in it; its total is set to their number
  */
 template <typename parsing_t>
 void write_fasta(const parsing_t& parsing, uint64_t n, const fasta_section& section, const fasta_position_map* map,
@@ -213,9 +213,10 @@ inline constexpr parsing_storage default_parsing_storage
  *        file, reads the parsing with decompress() or load() (see storage) and extracts the text. A compressor with a
  *        FASTA mode stores the mode (text_mode_plain or text_mode_fasta) in the first byte, in the FASTA mode followed
  *        by the FASTA section (see fasta_section) and the parsing of the sequence text, which is empty if nothing
- *        follows; -d restores the FASTA file, -ranges extracts ranges of the FASTA file (see write_fasta).
+ *        follows. With -d, the FASTA file is restored; with -ranges, ranges of the FASTA file are extracted (see
+ *        write_fasta).
  * @tparam parsing_t the type of the parsing
- * @tparam storage how the file stores the parsing
+ * @tparam storage how the parsing is stored in the file
  * @param cli the options
  * @param result_algo the value of the key "algo" of the RESULT line (see -m)
  * @param with_mode whether the file starts with the mode (the compressor has a FASTA mode)
@@ -237,9 +238,9 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
     auto time = now();
     parsing_t parsing;
     std::optional<fasta_section> fasta; // the FASTA section, in the FASTA mode
-    bool empty = false; // whether the file stores no parsing (an empty sequence text in the FASTA mode)
+    bool empty = false; // whether the file contains no parsing (an empty sequence text in the FASTA mode)
 
-    // true <=> the file stores the serialized parsing
+    // true <=> the file contains the serialized parsing
     constexpr bool loads = storage == parsing_storage::serialized;
 
     {
@@ -303,7 +304,7 @@ void decompress_parsing(compressor_cli_t& cli, const std::string& result_algo, b
     if (!cli.path_ranges_file.empty()) ranges = read_ranges_file(cli.path_ranges_file);
     uint64_t num_symbols = 0; // the total number of symbols to extract
 
-    // cut the ranges at the end of the text (a length of 0 counts as 1)
+    // cut the ranges at the end of the text (a length of 0 is treated as 1)
     for (auto& [position, length] : ranges) {
         if (position >= size) {
             throw std::runtime_error("position " + std::to_string(position) + " is past the end of the "

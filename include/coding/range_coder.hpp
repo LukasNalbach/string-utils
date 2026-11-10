@@ -50,7 +50,8 @@ inline constexpr uint32_t range_coder_output_bits = std::numeric_limits<uint8_t>
 inline constexpr uint32_t range_coder_min_range =
     uint32_t(1) << (std::numeric_limits<uint32_t>::digits - range_coder_output_bits);
 
-// a bit model stops lowering its adaptation rate 1 / (count + 2) after this many updates (it counts them in a byte)
+// number of updates after which the adaptation rate 1 / (count + 2) of a bit model is not lowered further (count is
+// stored in a byte)
 inline constexpr uint8_t bit_model_max_count = std::numeric_limits<uint8_t>::max();
 
 // [0..bit_model_max_count] adaptation_rate[c] = 2^probability_bits / (c + 2), the rate of a model after c updates
@@ -87,12 +88,12 @@ private:
     std::vector<uint8_t> out; // the encoded bytes
     uint64_t low = 0; // the lower end of the interval (33 bits: bit 32 is a carry into the bytes not yet written)
     uint32_t range = std::numeric_limits<uint32_t>::max(); // the length of the interval
-    uint8_t held = 0; // the byte that is held back until no carry can reach it
+    uint8_t held = 0; // the byte that is held back until no carry can change it
     uint64_t num_held = 1; // number of held back bytes: held followed by num_held - 1 bytes 0xFF
     bool first = true; // true <=> no byte has been written (the first held byte is 0 and is not stored)
 
-    // moves the highest byte of the low 32 bits of low into the held bytes and writes the held bytes, if no carry
-    // can reach them anymore
+    // moves the highest byte of the low 32 bits of low into the held bytes and writes the held bytes if no carry can
+    // change them anymore
     inline void shift_low()
     {
         const uint8_t top_byte = uint8_t(low >> (std::numeric_limits<uint32_t>::digits - range_coder_output_bits));

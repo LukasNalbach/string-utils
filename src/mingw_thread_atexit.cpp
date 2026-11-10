@@ -83,7 +83,7 @@ void run_destructors(void* list)
     }
 }
 
-// a thread_local object whose first access creates the key of emutls
+// a thread_local object; the key of emutls is created when it is accessed for the first time
 thread_local volatile int emutls_key_creator = 0;
 
 // creates the key of emutls and then destructors_key, before any other initialization of the program

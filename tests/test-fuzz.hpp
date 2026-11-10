@@ -128,8 +128,8 @@ struct fuzz_functionality {
  * @brief fuzzes a data structure by running each of its functionalities on random inputs and prints, per
  *        functionality, a progress bar with the number of validated inputs and the elapsed time to stderr
  *
- * Each functionality stops after its share of the iterations or after fuzz_seconds() seconds; at least one
- * input is validated. If input_size is given, the maximum input length is reduced during the run (down to
+ * The fuzzing of each functionality stops after its share of the iterations or after fuzz_seconds() seconds; at
+ * least one input is validated. If input_size is given, the maximum input length is reduced during the run (down to
  * min_input_size), such that the iterations fit into the time. If <prefix>_TEST_SEED is set, neither the time
  * limit nor the reduction of the input length is applied.
  *
@@ -158,15 +158,17 @@ inline void run_fuzz(
     constexpr uint64_t window_divisor = 8;
     constexpr uint64_t min_window_length = 32;
     constexpr uint64_t max_window_length = 128;
-    // a batch takes about 1 / batches_per_time_limit of the time limit and has at most max_batch_size inputs
+    // the running time of a batch is about 1 / batches_per_time_limit of the time limit; a batch has at most
+    // max_batch_size inputs
     constexpr double batches_per_time_limit = 100.0;
     constexpr uint64_t max_batch_size = 4096;
     // the size is reduced if the time per input exceeds the remaining time per remaining input times max_overtime
     constexpr double max_overtime = 1.25;
-    // the size is restored if a reduction leaves more than max_time_ratio_after_reduction of the time per input
+    // the size is restored if the time per input after a reduction is more than max_time_ratio_after_reduction times
+    // the time per input before it
     constexpr double max_time_ratio_after_reduction = 0.9;
-    // a reduction multiplies the size by (remaining time per input / time per input)^reduction_exponent, clamped to
-    // [min_reduction_factor, max_reduction_factor]
+    // in a reduction, the size is multiplied by (remaining time per input / time per input)^reduction_exponent,
+    // clamped to [min_reduction_factor, max_reduction_factor]
     constexpr double reduction_exponent = 0.75;
     constexpr double min_reduction_factor = 0.25;
     constexpr double max_reduction_factor = 0.9;
@@ -278,7 +280,8 @@ inline void run_fuzz(
             uint64_t batch = 1;
 
             if (done > 0 && elapsed_before_batch > 0) {
-                // choose the batch size such that a batch takes about 1 / batches_per_time_limit of the time limit
+                // choose the batch size such that the running time of a batch is about 1 / batches_per_time_limit of
+                // the time limit
                 const double per_input = elapsed_before_batch / (double) done;
                 batch = std::clamp<uint64_t>((uint64_t) ((max_seconds / batches_per_time_limit)
                     / std::max(per_input, min_time_per_input)), 1, max_batch_size);

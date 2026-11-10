@@ -60,7 +60,7 @@ using byte_set = std::array<bool, num_byte_values>;
  * @brief returns the bytes that occur in a text
  * @param text the text
  * @param num_threads the number of threads
- * @param progress if not nullptr, counts the bytes read
+ * @param progress if not nullptr, the read bytes are counted in it
  */
 inline byte_set occurring_bytes(const text_source<uint8_t>& text, uint64_t num_threads,
     phase_progress* progress = nullptr)
@@ -94,7 +94,7 @@ inline byte_set occurring_bytes(const text_source<uint8_t>& text, uint64_t num_t
 /**
  * @brief returns whether a byte below min_symbol occurs in a text
  * @param occurs the bytes that occur in the text
- * @param min_symbol the smallest symbol a construction accepts
+ * @param min_symbol the smallest symbol allowed in the input of a construction
  */
 inline bool needs_byte_map(const byte_set& occurs, uint64_t min_symbol)
 {
@@ -111,7 +111,8 @@ private:
     std::vector<uint8_t> bytes; // [0..sigma-1] the distinct bytes in increasing order
     std::array<uint16_t, num_byte_values> symbol {}; // [0..255] symbol[c] = the symbol of the byte c (0: c does not occur)
 
-    // sets the map of the bytes that occur, the smallest to min_symbol; returns whether the symbols fit into 16 bits
+    // sets the map of the bytes that occur, with the smallest byte mapped to min_symbol; returns whether the symbols
+    // fit into 16 bits
     bool assign(const byte_set& occurs, uint64_t min_symbol)
     {
         smallest = min_symbol;
@@ -185,7 +186,7 @@ public:
     /**
      * @brief reads the section section_byte_map of a runs file
      * @param file the runs file
-     * @return whether the file stores the section with distinct bytes in increasing order and symbols that fit into
+     * @return whether the file contains the section with distinct bytes in increasing order and symbols that fit into
      *         16 bits
      */
     bool load(const run_data_file& file)
@@ -222,7 +223,7 @@ private:
     class reader : public text_source<sym_t>::reader {
     private:
         const mapped_byte_source& source; // the mapped text
-        std::unique_ptr<text_source<uint8_t>::reader> bytes; // reads the byte text
+        std::unique_ptr<text_source<uint8_t>::reader> bytes; // the reader of the byte text
 
     public:
         explicit reader(const mapped_byte_source& source) : source(source), bytes(source.text.new_reader()) { }
@@ -260,7 +261,7 @@ public:
  *        min_symbol (a std::array of uint8_t or of uint16_t, see byte_map::with_symbols), whose section is added to
  *        prm.extra_sections before
  * @param occurs the bytes that occur in the text
- * @param min_symbol the smallest symbol the construction accepts
+ * @param min_symbol the smallest symbol allowed in the input of the construction
  * @param prm the parameters of the construction
  * @param build builds the output of the text read through map
  * @return the result of build

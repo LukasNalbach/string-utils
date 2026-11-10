@@ -51,7 +51,7 @@ enum repetitive_input_kind_t : uint8_t {
     _repetitive_blockmove = 3,
     // blocks of random symbols, alternating at random with copies of earlier substrings
     _repetitive_random_copies = 4,
-    // each step appends a random symbol or (with a probability of 98 %) a copy of an earlier substring
+    // in each step, a random symbol or (with a probability of 98 %) a copy of an earlier substring is appended
     _repetitive_lz = 5,
     // the Fibonacci word over the symbols min_sym and min_sym + 1
     _repetitive_fibonacci = 6,

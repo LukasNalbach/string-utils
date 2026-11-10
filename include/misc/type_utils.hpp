@@ -123,7 +123,7 @@ struct value_report_fn {
 /**
  * @brief returns a value_report_fn that calls report(value, second)
  * @tparam report_t type of the report function
- * @param report the report function; it has to live as long as the returned value_report_fn is used
+ * @param report the report function; it must not be destroyed while the returned value_report_fn is used
  */
 template <typename report_t>
 inline value_report_fn make_value_report_fn(report_t& report)

@@ -99,7 +99,7 @@ inline void direct_output_filebuf::open_file(const std::string& path, bool appen
     }
 
     if (!direct) advise_uncached(fd);
-    // the bytes already in the file count as written and dropped
+    // the bytes already in the file are treated as written and dropped
     file_length = append && fd >= 0 ? uint64_t(std::max<platform::file_offset_t>(0, platform::seek_end(fd))) : 0;
     num_flushed = file_length;
     dropped_end = file_length;
@@ -291,7 +291,7 @@ inline direct_input_filebuf::pos_type direct_input_filebuf::seekoff(off_type off
     }
 
     if (new_pos < 0) return pos_type(off_type(-1));
-    // also move the position of the descriptor, which the reads without O_DIRECT use
+    // also move the position of the descriptor, which is used by the reads without O_DIRECT
     if (!platform::seek(fd, uint64_t(new_pos))) return pos_type(off_type(-1));
 
     file_pos = uint64_t(new_pos);
@@ -408,7 +408,7 @@ inline void direct_positioned_file::open_file(const std::string& file_path, uint
     fd = open_direct_or_buffered(path, platform::file_access::write, direct);
     if (fd < 0) throw std::runtime_error("cannot create " + path);
     if (!direct) advise_uncached(fd);
-    // the threads write far apart (see platform::make_sparse)
+    // the file is made sparse, since the threads write at offsets far apart (see platform::make_sparse)
     platform::make_sparse(fd);
     if (!platform::set_size(fd, length)) throw std::runtime_error("cannot resize " + path);
 }
@@ -459,7 +459,7 @@ inline void direct_positioned_file::write(const char* data, uint64_t size, uint6
         return;
     }
 
-    // [first, last) are the sectors the write covers completely
+    // [first, last) are the sectors that are written completely by the write
     const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
     const uint64_t last = std::max(first, (end / sector) * sector);
     if (offset < first) write_partial(data, offset, first);
@@ -531,7 +531,7 @@ inline void parallel_output_file::write(const void* data, uint64_t size, uint64_
         return;
     }
 
-    // [first, last) are the sectors the write covers completely
+    // [first, last) are the sectors that are written completely by the write
     const uint64_t first = std::min(end, div_ceil(offset, sector) * sector);
     const uint64_t last = std::max(first, (end / sector) * sector);
     if (offset < first) write_partial(bytes, offset, first);

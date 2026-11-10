@@ -11,8 +11,8 @@ large strings and integer arrays, together with the third-party libraries they u
   texts a construction reads: files, FASTA files and texts in memory, with their bytes mapped to symbols that are at
   least a smallest symbol (the map is stored in the runs file).
 - [include/fasta/](include/fasta/): FASTA files as texts (a parallel scan and a reader of the text), the split of a
-  FASTA file into its sequences, header lines and line layout, its restoration and the map of the positions of the
-  file to its sequence text and back.
+  FASTA file into its sequences, header lines and line layout, its restoration, and a map from file positions to
+  positions in the sequence text and back.
 - [include/coding/](include/coding/): a binary arithmetic coder with context mixing and variable-length integers.
 - [include/data_structures/](include/data_structures/): plain and Elias-Fano coded bit vectors with rank and select,
   interleaved bit-aligned vectors, a range minimum query tree and a segmented vector.
@@ -104,9 +104,9 @@ The options and environment variables start with the prefix of the top-level pro
 
 | Environment variable | Description |
 | --- | --- |
-| `<prefix>_TMPDIR` | the directory of the temporary files (default: the temporary directory of the system) |
+| `<prefix>_TMPDIR` | the directory for temporary files (default: the temporary directory of the system) |
 | `<prefix>_TEST_SECONDS`, `<prefix>_TEST_ITERATIONS` | the maximum time in seconds (default 10) and number of random inputs (default 1000) per tested function |
-| `<prefix>_TEST_SEED` | repeats the random inputs of the seed that a failed test printed |
+| `<prefix>_TEST_SEED` | the seed printed by a failed test; the test is repeated with the random inputs of this seed |
 
 ## Patches
 
