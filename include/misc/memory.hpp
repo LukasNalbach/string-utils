@@ -179,6 +179,11 @@ inline constexpr uint64_t cache_line_bytes = 128;
 inline constexpr uint64_t cache_line_bytes = 64;
 #endif
 
+// the size of a line of the data structures that store their data in lines, in bytes (the same on every platform); a
+// line lies in one cache line if the data is aligned to cache_line_bytes (see cache_aligned_no_init_allocator)
+inline constexpr uint64_t data_line_bytes = 64;
+static_assert(cache_line_bytes % data_line_bytes == 0);
+
 /**
  * @brief stores the data of one thread in its own cache lines (aligned to a cache line, and padded to a multiple of
  *        it), so that threads that write their data at the same time do not share a cache line
