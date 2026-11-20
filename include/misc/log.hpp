@@ -165,6 +165,19 @@ inline std::string format_count(uint64_t count, const std::string& noun, const s
 inline std::string format_threads(uint64_t p) { return format_count(p, "thread"); }
 
 /**
+ * @brief formats a duration in nanoseconds like format_time, followed by the exact duration in nanoseconds with a
+ *        separator every three digits if format_time rounds it
+ * @param ns a duration in nanoseconds
+ * @return the formatted duration, e.g. "4:01 min (241,034,512,345 ns)" or "379 ns"
+ */
+inline std::string format_time_exact(uint64_t ns)
+{
+    const std::string time = format_time(ns);
+    if (time == std::to_string(ns) + " ns") return time;
+    return time + " (" + format_number(ns) + " ns)";
+}
+
+/**
  * @brief formats a size in bytes with an appropriate unit (B, KB, MB or GB)
  * @param B a size in bytes
  * @return the formatted size (sizes in GB with two decimals)

@@ -299,6 +299,7 @@ struct fasta_chunk {
     void header_start() { } // the '>' of a header line
     void header_bytes(const uint8_t*, uint64_t) { } // bytes of a header line (see fasta_transform::walk)
     void sequence_symbols(uint64_t) { } // a number of body bytes of the current line that are mapped to a symbol
+    void masked_separator(uint64_t) { } // the separator of a masked run, at a position of the text of the chunk
     // a line feed that ends a header line (first argument true) or another line; the second argument is true if a
     // carriage return precedes the line feed
     void line_end(bool, bool) { }

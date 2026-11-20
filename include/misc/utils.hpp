@@ -51,15 +51,15 @@ enum array_kind_t : uint8_t {
     // the differences of consecutive values of an integer array are encoded; supports random access
     _diff_access = 0,
     // like _diff_access, and supports range minimum, psv and nsv queries
-    _diff_rmq = 1,
-    // like _diff_rmq, for two integer arrays of the same length (given as a sequence of pairs) that are
+    _diff_minima = 1,
+    // like _diff_minima, for two integer arrays of the same length (given as a sequence of pairs) that are
     // stored in one data structure
-    _diff_pair_rmq = 2,
+    _diff_pair_minima = 2,
     // the input is encoded as it is (e.g., a byte text); supports random access and extraction
     _plain = 3
 };
 
-// selects one of the two arrays of a data structure of the kind _diff_pair_rmq
+// selects one of the two arrays of a data structure of the kind _diff_pair_minima
 enum component_t : uint8_t { _first = 0, _second = 1 };
 
 // a search/reading direction, or a set of them: NO_DIR is neither and BOTH_DIRS is both

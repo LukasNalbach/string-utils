@@ -25,12 +25,12 @@
  */
 
 /**
- * @file rmq_tree.hpp
+ * @file min_tree.hpp
  * @brief range minimum queries with a min-augmented tau-ary tree
  */
 
-#ifndef STRING_UTILS_DATA_STRUCTURES_RMQ_TREE_HPP
-#define STRING_UTILS_DATA_STRUCTURES_RMQ_TREE_HPP
+#ifndef STRING_UTILS_DATA_STRUCTURES_MIN_TREE_HPP
+#define STRING_UTILS_DATA_STRUCTURES_MIN_TREE_HPP
 
 #include <limits>
 #include <vector>
@@ -47,7 +47,7 @@
  * @tparam tau the arity of the tree
  */
 template <uint8_t tau = 32>
-class rmq_tree {
+class min_tree {
     static_assert(tau >= 2);
 
 public:
@@ -122,7 +122,7 @@ protected:
 public:
     // ############################# CONSTRUCTORS #############################
 
-    rmq_tree() = default;
+    min_tree() = default;
 
     /**
      * @brief builds the tree over num_values values
@@ -133,7 +133,7 @@ public:
      * @param num_threads number of threads to use; value is called concurrently if num_threads > 1
      */
     template <typename fnc_t>
-    rmq_tree(uint64_t num_values, uint8_t width, fnc_t value, uint64_t num_threads = 1)
+    min_tree(uint64_t num_values, uint8_t width, fnc_t value, uint64_t num_threads = 1)
     {
         allocate(num_values, width);
         if (num_values == 0) return;
@@ -160,10 +160,10 @@ public:
      * @return the tree
      */
     template <typename fnc_t>
-    static rmq_tree build_sequentially(
+    static min_tree build_sequentially(
         uint64_t num_values, uint8_t width, fnc_t value, uint64_t num_threads = 1)
     {
-        rmq_tree tree;
+        min_tree tree;
         tree.allocate(num_values, width);
 
         for (uint64_t i = 0; i < num_values; i++) {
@@ -342,4 +342,4 @@ public:
     std::istream& operator<<(std::istream& is) { load(is); return is; }
 };
 
-#endif // STRING_UTILS_DATA_STRUCTURES_RMQ_TREE_HPP
+#endif // STRING_UTILS_DATA_STRUCTURES_MIN_TREE_HPP

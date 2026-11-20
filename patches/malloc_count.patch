@@ -1,12 +1,13 @@
 diff --git a/malloc_count.c b/malloc_count.c
-index a1deac1..f3aad3d 100644
+index a1deac1..8048ae7 100644
 --- a/malloc_count.c
 +++ b/malloc_count.c
-@@ -32,16 +32,17 @@
+@@ -32,16 +32,18 @@
  #include <stdio.h>
  #include <locale.h>
  #include <dlfcn.h>
 +#include <errno.h>
++#include <pthread.h>
  
  #include "malloc_count.h"
  
@@ -22,7 +23,7 @@ index a1deac1..f3aad3d 100644
  
  /* to each allocation additional data is added for bookkeeping. due to
   * alignment requirements, we can optionally add more than just one integer.
-@@ -64,6 +65,10 @@ static aligned_alloc_type real_aligned_alloc = NULL;
+@@ -64,6 +66,10 @@ static aligned_alloc_type real_aligned_alloc = NULL;
  static free_type real_free = NULL;
  static realloc_type real_realloc = NULL;
  
@@ -33,33 +34,133 @@ index a1deac1..f3aad3d 100644
  /* a sentinel value prefixed to each allocation */
  static const size_t sentinel = 0xDEADC0DE;
  
-@@ -90,15 +95,23 @@ static void inc_count(size_t inc)
+@@ -85,61 +91,108 @@ static long long peak = 0, curr = 0, total = 0, num_allocs = 0;
+ static malloc_count_callback_type callback = NULL;
+ static void* callback_cookie = NULL;
+ 
+-/* add allocation to statistics */
+-static void inc_count(size_t inc)
++/* the allocations and frees of a thread are added to the statistics in batches: once the net sum of their sizes since
++ * the last batch reaches batch_bytes in absolute value (at once for an allocation of at least batch_bytes), when the
++ * thread reads the statistics and when it exits; curr and peak then lie at most batch_bytes per thread below or above
++ * their exact values, and an allocation that is freed soon by the same thread does not touch the shared counters */
++static const long long batch_bytes = 4096;
++static __thread long long batch_curr = 0, batch_total = 0, batch_allocs = 0;
++/* whether the thread exit of the thread adds its batch (see flush_at_exit) */
++static __thread int batch_registered = 0;
++static pthread_key_t batch_key;
++static int batch_key_created = 0;
++
++/* adds the batch of the calling thread to the statistics */
++static void flush_batch(void)
  {
  #if THREAD_SAFE_GCC_INTRINSICS
-     long long mycurr = __sync_add_and_fetch(&curr, inc);
+-    long long mycurr = __sync_add_and_fetch(&curr, inc);
 -    if (mycurr > peak) peak = mycurr;
 -    total += inc;
+-    if (callback) callback(callback_cookie, mycurr);
++    long long mycurr = __sync_add_and_fetch(&curr, batch_curr);
 +
 +    /* set peak to the maximum of peak and mycurr */
-+    long long seen = peak;
-+    while (mycurr > seen && !__sync_bool_compare_and_swap(&peak, seen, mycurr)) seen = peak;
++    if (batch_curr > 0) {
++        long long seen = peak;
++        while (mycurr > seen && !__sync_bool_compare_and_swap(&peak, seen, mycurr)) seen = peak;
++    }
 +
-+    __sync_add_and_fetch(&total, (long long) inc);
-     if (callback) callback(callback_cookie, mycurr);
++    if (batch_total != 0) __sync_add_and_fetch(&total, batch_total);
++    if (batch_allocs != 0) __sync_add_and_fetch(&num_allocs, batch_allocs);
  #else
-     if ((curr += inc) > peak) peak = curr;
-     total += inc;
-     if (callback) callback(callback_cookie, curr);
+-    if ((curr += inc) > peak) peak = curr;
+-    total += inc;
+-    if (callback) callback(callback_cookie, curr);
++    long long mycurr = (curr += batch_curr);
++    if (curr > peak) peak = curr;
++    total += batch_total;
++    num_allocs += batch_allocs;
  #endif
-+#if THREAD_SAFE_GCC_INTRINSICS
-+    __sync_add_and_fetch(&num_allocs, 1);
-+#else
-     ++num_allocs;
-+#endif
+-    ++num_allocs;
++    batch_curr = batch_total = batch_allocs = 0;
++    if (callback) callback(callback_cookie, mycurr);
++}
++
++/* the destructor of batch_key: adds the batch of an exiting thread */
++static void flush_at_exit(void* unused)
++{
++    (void) unused;
++    flush_batch();
++    batch_registered = 0;
++}
++
++/* adds a change of the allocated memory to the batch of the calling thread */
++static void add_to_batch(long long delta)
++{
++    if (!batch_registered && batch_key_created) {
++        batch_registered = 1;
++        /* a value other than NULL, so that the thread exit calls flush_at_exit */
++        pthread_setspecific(batch_key, &batch_registered);
++    }
++
++    batch_curr += delta;
++    if (batch_curr >= batch_bytes || batch_curr <= -batch_bytes) flush_batch();
++}
++
++/* add allocation to statistics */
++static void inc_count(size_t inc)
++{
++    batch_total += (long long) inc;
++    batch_allocs++;
++    add_to_batch((long long) inc);
  }
  
  /* decrement allocation to statistics */
-@@ -162,11 +175,23 @@ extern void* malloc(size_t size)
+ static void dec_count(size_t dec)
+ {
+-#if THREAD_SAFE_GCC_INTRINSICS
+-    long long mycurr = __sync_sub_and_fetch(&curr, dec);
+-    if (callback) callback(callback_cookie, mycurr);
+-#else
+-    curr -= dec;
+-    if (callback) callback(callback_cookie, curr);
+-#endif
++    add_to_batch(-(long long) dec);
+ }
+ 
+ /* user function to return the currently allocated amount of memory */
+ extern size_t malloc_count_current(void)
+ {
++    flush_batch();
+     return curr;
+ }
+ 
+ /* user function to return the peak allocation */
+ extern size_t malloc_count_peak(void)
+ {
++    flush_batch();
+     return peak;
+ }
+ 
+ /* user function to reset the peak allocation to current */
+ extern void malloc_count_reset_peak(void)
+ {
++    flush_batch();
+     peak = curr;
+ }
+ 
+ /* user function to return total number of allocations */
+ extern size_t malloc_count_num_allocs(void)
+ {
++    flush_batch();
+     return num_allocs;
+ }
+ 
+ /* user function which prints current and peak allocation to stderr */
+ extern void malloc_count_print_status(void)
+ {
++    flush_batch();
+     fprintf(stderr, PPREFIX "current %'lld, peak %'lld\n",
+             curr, peak);
+ }
+@@ -162,11 +215,23 @@ extern void* malloc(size_t size)
  
      if (size == 0) return NULL;
  
@@ -83,7 +184,7 @@ index a1deac1..f3aad3d 100644
          inc_count(size);
          if (log_operations && size >= log_operations_threshold) {
              fprintf(stderr, PPREFIX "malloc(%'lld) = %p   (current %'lld)\n",
-@@ -222,8 +247,14 @@ extern void* aligned_alloc(size_t al, size_t size)
+@@ -222,8 +287,14 @@ extern void* aligned_alloc(size_t al, size_t size)
          if (al >= alignment) {
              extra_alignment = al - alignment;
          }
@@ -100,7 +201,7 @@ index a1deac1..f3aad3d 100644
          ret = (char*)ret + extra_alignment;
  
          inc_count(size);
-@@ -245,7 +276,7 @@ extern void* aligned_alloc(size_t al, size_t size)
+@@ -245,7 +316,7 @@ extern void* aligned_alloc(size_t al, size_t size)
  int posix_memalign(void **memptr, size_t al, size_t size)
  {
      *memptr = aligned_alloc(al, size);
@@ -109,7 +210,7 @@ index a1deac1..f3aad3d 100644
  }
  
  /* exported memalign symbol that overrides loading from libc */
-@@ -277,13 +308,13 @@ extern void free(void* ptr)
+@@ -277,13 +348,13 @@ extern void free(void* ptr)
          return;
      }
  
@@ -128,7 +229,17 @@ index a1deac1..f3aad3d 100644
      size = *(size_t*)ptr;
      extra_alignment = *(size_t*)(ptr + sizeof(size_t));
      ptr = (char*)ptr - extra_alignment;
-@@ -372,6 +403,12 @@ extern void* realloc(void* ptr, size_t size)
+@@ -305,6 +376,9 @@ extern void* calloc(size_t nmemb, size_t size)
+     size *= nmemb;
+     if (!size) return NULL;
+     ret = malloc(size);
++    if (!ret) return NULL;
++    /* hides ret from the compiler, which would otherwise replace malloc + memset by a call of calloc */
++    __asm__ volatile("" : "+r"(ret));
+     memset(ret, 0, size);
+     return ret;
+ }
+@@ -372,6 +446,12 @@ extern void* realloc(void* ptr, size_t size)
  
      newptr = (*real_realloc)(ptr, size + alignment + extra_alignment);
  
@@ -141,7 +252,7 @@ index a1deac1..f3aad3d 100644
      if (log_operations && size >= log_operations_threshold)
      {
          if (newptr == ptr)
-@@ -393,6 +430,8 @@ static __attribute__((constructor)) void init(void)
+@@ -393,8 +473,12 @@ static __attribute__((constructor)) void init(void)
  {
      char *error;
  
@@ -149,8 +260,12 @@ index a1deac1..f3aad3d 100644
 +
      setlocale(LC_NUMERIC, ""); /* for better readable numbers */
  
++    if (!batch_key_created) batch_key_created = pthread_key_create(&batch_key, flush_at_exit) == 0;
++
      dlerror();
-@@ -424,9 +463,11 @@ static __attribute__((constructor)) void init(void)
+ 
+     real_malloc = (malloc_type)dlsym(RTLD_NEXT, "malloc");
+@@ -424,9 +508,11 @@ static __attribute__((constructor)) void init(void)
  
  static __attribute__((destructor)) void finish(void)
  {

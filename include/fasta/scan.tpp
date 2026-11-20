@@ -182,6 +182,8 @@ inline void fasta_range_scanner<chunk_t, writes>::yield(uint8_t symbol, uint64_t
 
     first_symbol = false;
     if constexpr (!writes) out.freq[symbol]++;
+    // a separator outside a header line is the separator of a masked run
+    if (step == fasta_transform::_separator && !in_header_after) out.masked_separator(out.text_size);
 
     if (out.text_size == next_sample && sample_period != 0) {
         out.samples.push_back(fasta_sample { out.text_size, offset, before.to_bits() });
@@ -220,6 +222,7 @@ inline uint64_t fasta_range_scanner<chunk_t, writes>::write_body(const uint8_t* 
 
         // the first symbol of the chunk is the separator of a masked run
         if (is_masked && first_symbol && k == 0) [[unlikely]] out.starts_in_masked_run = true;
+        if (is_masked) out.masked_separator(base + k);
         sym[k++] = is_masked ? separator : uint8_t(s);
         letters += !is_masked;
         masked = is_masked;
